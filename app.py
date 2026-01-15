@@ -404,13 +404,43 @@ class DataLoader:
             else:
                 df['Sector'] = 'Others'
             
-            # Calculate technical indicators
+            # Calculate technical indicators - FIXED VERSION
             if 'Close' in df.columns:
+                # Calculate moving averages
                 df['Price_MA20'] = df.groupby('Stock Code')['Close'].transform(lambda x: x.rolling(20, min_periods=5).mean())
                 df['Price_MA50'] = df.groupby('Stock Code')['Close'].transform(lambda x: x.rolling(50, min_periods=10).mean())
-                df['RSI_14'] = df.groupby('Stock Code')['Close'].transform(
-                    lambda x: self.calculate_rsi(x, period=14) if len(x) >= 14 else 50
-                )
+                
+                # Define RSI calculation function INSIDE this method
+                def calculate_rsi_for_group(prices, period=14):
+                    """Calculate RSI for a price series"""
+                    if len(prices) < period + 1:
+                        # Return series of 50s with same length as input
+                        return pd.Series([50] * len(prices), index=prices.index)
+                    
+                    # Calculate price changes
+                    delta = prices.diff()
+                    
+                    # Separate gains and losses
+                    gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
+                    
+                    # Avoid division by zero
+                    loss = loss.replace(0, np.nan)
+                    
+                    # Calculate RS and RSI
+                    rs = gain / loss
+                    rsi = 100 - (100 / (1 + rs))
+                    
+                    # Fill NaN values with 50
+                    rsi = rsi.fillna(50)
+                    
+                    # Ensure RSI stays between 0-100
+                    rsi = rsi.clip(0, 100)
+                    
+                    return rsi
+                
+                # Apply RSI calculation to each stock group
+                df['RSI_14'] = df.groupby('Stock Code')['Close'].transform(calculate_rsi_for_group)
             
             return df
             
@@ -418,33 +448,6 @@ class DataLoader:
             st.error(f"Error processing historical data: {e}")
             return pd.DataFrame()
     
-    def calculate_rsi(self, prices, period=14):
-        """Calculate RSI indicator"""
-        if len(prices) < period + 1:
-            return 50
-        
-        deltas = np.diff(prices)
-        seed = deltas[:period]
-        up = seed[seed >= 0].sum() / period
-        down = -seed[seed < 0].sum() / period
-        rs = up / down if down != 0 else 0
-        rsi = 100.0 - 100.0 / (1.0 + rs)
-        
-        for i in range(period, len(deltas)):
-            delta = deltas[i]
-            if delta > 0:
-                upval = delta
-                downval = 0.0
-            else:
-                upval = 0.0
-                downval = -delta
-            
-            up = (up * (period - 1) + upval) / period
-            down = (down * (period - 1) + downval) / period
-            rs = up / down if down != 0 else 0
-            rsi = 100.0 - 100.0 / (1.0 + rs)
-        
-        return rsi
     
     @st.cache_data(ttl=3600, show_spinner="🔄 Merging Datasets...")
     def load_merged_data(_self):
