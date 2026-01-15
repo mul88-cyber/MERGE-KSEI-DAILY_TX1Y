@@ -12,6 +12,9 @@ import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import base64
+import ast
+import re
 
 # Google Drive imports
 from google.oauth2.service_account import Credentials
@@ -22,9 +25,9 @@ from googleapiclient.http import MediaIoBaseDownload
 # ⚙️ PAGE CONFIG & CSS
 # ==============================================================================
 st.set_page_config(
-    page_title="MERGE ANALYTIC KSEI & DAILY TX1Y [DEBUG]",
+    page_title="MERGE ANALYTIC KSEI & DAILY TX1Y",
     layout="wide",
-    page_icon="🔧",
+    page_icon="📊",
     initial_sidebar_state="expanded"
 )
 
@@ -100,20 +103,6 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background-color: #4318FF;
     }
-    .debug-box {
-        background-color: #FFF5F5;
-        border-left: 4px solid #EE5D50;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-radius: 5px;
-    }
-    .success-box {
-        background-color: #F0FFF4;
-        border-left: 4px solid #05CD99;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-radius: 5px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,78 +137,117 @@ SCORE_WEIGHTS = {
 }
 
 # ==============================================================================
-# 📦 DATA LOADER CLASS (DEBUG VERSION)
+# 📦 DATA LOADER CLASS - FIXED VERSION
 # ==============================================================================
 class DataLoader:
     def __init__(self):
         self.service = None
         self.initialize_gdrive()
     
+    def parse_creds_from_secrets(self, creds_data):
+        """Robust parsing of credentials from Streamlit secrets"""
+        try:
+            # Case 1: Already a dict (local development)
+            if isinstance(creds_data, dict):
+                return creds_data
+            
+            # Case 2: String that needs parsing
+            if isinstance(creds_data, str):
+                # Clean the string
+                creds_str = creds_data.strip()
+                
+                # Remove wrapping quotes
+                if (creds_str.startswith("'") and creds_str.endswith("'")) or \
+                   (creds_str.startswith('"') and creds_str.endswith('"')):
+                    creds_str = creds_str[1:-1]
+                
+                # Remove triple quotes if present
+                if creds_str.startswith("'''") and creds_str.endswith("'''"):
+                    creds_str = creds_str[3:-3]
+                elif creds_str.startswith('"""') and creds_str.endswith('"""'):
+                    creds_str = creds_str[3:-3]
+                
+                # Fix escaped characters
+                creds_str = creds_str.replace('\\n', '\n').replace('\\\\n', '\n')
+                creds_str = creds_str.replace('\\"', '"').replace("\\'", "'")
+                
+                # Try JSON parsing first
+                try:
+                    return json.loads(creds_str)
+                except json.JSONDecodeError:
+                    # Try ast.literal_eval for Python-style strings
+                    try:
+                        return ast.literal_eval(creds_str)
+                    except:
+                        # Last resort: regex extraction
+                        import re
+                        json_match = re.search(r'\{.*\}', creds_str, re.DOTALL)
+                        if json_match:
+                            json_str = json_match.group(0)
+                            # Fix newlines in the JSON string
+                            json_str = json_str.replace('\n', '\\n')
+                            return json.loads(json_str)
+                        else:
+                            raise ValueError("Could not parse credentials string")
+            
+            # Case 3: Base64 encoded
+            if isinstance(creds_data, str) and len(creds_data) > 100 and '=' in creds_data[-2:]:
+                try:
+                    decoded = base64.b64decode(creds_data).decode('utf-8')
+                    return json.loads(decoded)
+                except:
+                    pass
+            
+            raise ValueError(f"Unknown credentials format: {type(creds_data)}")
+            
+        except Exception as e:
+            st.error(f"Credential parsing error: {e}")
+            return None
+    
     def initialize_gdrive(self):
         """Initialize Google Drive service with Streamlit secrets"""
         try:
             # Get credentials from secrets
-            creds_data = st.secrets["gcp_service_account"]
-            
-            st.write("🔧 DEBUG: Checking credentials format...")
-            st.write(f"Type of creds_data: {type(creds_data)}")
-            
-            # Handle different formats
-            if isinstance(creds_data, str):
-                st.write("Creds is string, parsing JSON...")
-                # Clean the string if needed
-                if creds_data.startswith("'") and creds_data.endswith("'"):
-                    creds_data = creds_data[1:-1]
-                # Replace escaped characters
-                creds_data = creds_data.replace('\\n', '\n').replace('\\\\n', '\n')
-                
-                try:
-                    creds_json = json.loads(creds_data)
-                    st.success("✅ JSON parsed successfully from string")
-                except json.JSONDecodeError as e:
-                    st.error(f"JSON decode error: {e}")
-                    # Try alternative parsing
-                    try:
-                        # Try with single quotes
-                        import ast
-                        creds_json = ast.literal_eval(creds_data)
-                        st.success("✅ Parsed with ast.literal_eval")
-                    except:
-                        st.error("Failed all parsing attempts")
-                        return False
-            elif isinstance(creds_data, dict):
-                st.write("Creds is already dict")
-                creds_json = creds_data
-            else:
-                st.error(f"Unknown credentials format: {type(creds_data)}")
+            if "gcp_service_account" not in st.secrets:
+                st.error("❌ 'gcp_service_account' not found in secrets.toml")
                 return False
             
-            st.write("✅ Creating credentials object...")
+            creds_data = st.secrets["gcp_service_account"]
+            
+            # Parse credentials
+            creds_json = self.parse_creds_from_secrets(creds_data)
+            if creds_json is None:
+                return False
+            
+            # Create credentials object
             creds = Credentials.from_service_account_info(
                 creds_json, 
                 scopes=['https://www.googleapis.com/auth/drive.readonly']
             )
             
-            st.write("✅ Building GDrive service...")
+            # Build service
             self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             
-            st.success("🎉 GDrive Service initialized successfully!")
+            # Test the service
+            try:
+                about = self.service.about().get(fields="user").execute()
+                st.success(f"✅ Google Drive authenticated: {about.get('user', {}).get('emailAddress', 'Service Account')}")
+            except Exception as test_err:
+                st.warning(f"⚠️ Auth test: {test_err}")
+                # Continue anyway
+            
             return True
             
         except Exception as e:
-            st.error(f"❌ GDrive Auth Error: {type(e).__name__}: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc(), language='python')
+            st.error(f"❌ GDrive Initialization Error: {type(e).__name__}: {str(e)}")
             return False
     
     def list_files_in_folder(self):
-        """List all files in the folder for debugging"""
+        """List all files in the folder"""
         if not self.service:
-            st.warning("Service not initialized")
             return []
         
         try:
-            st.write(f"🔍 Listing files in folder: {FOLDER_ID}")
             query = f"'{FOLDER_ID}' in parents and trashed=false"
             results = self.service.files().list(
                 q=query, 
@@ -227,97 +255,53 @@ class DataLoader:
                 pageSize=100
             ).execute()
             
-            files = results.get('files', [])
-            st.write(f"Found {len(files)} files")
-            return files
+            return results.get('files', [])
             
         except Exception as e:
             st.error(f"Error listing files: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             return []
     
     def download_file(self, file_name):
-        """Download file from Google Drive with debug info"""
+        """Download file from Google Drive"""
         if not self.service:
             return None, "Service not initialized"
         
         try:
-            st.markdown(f"<div class='debug-box'><b>🔍 Searching for:</b> '{file_name}'</div>", unsafe_allow_html=True)
-            
             # Search for file
             query = f"'{FOLDER_ID}' in parents and name='{file_name}' and trashed=false"
-            st.write(f"Query: {query}")
-            
-            results = self.service.files().list(
-                q=query, 
-                fields="files(id, name, size, modifiedTime)",
-                pageSize=5
-            ).execute()
-            
+            results = self.service.files().list(q=query, fields="files(id, name)", pageSize=1).execute()
             items = results.get('files', [])
             
             if not items:
-                st.error(f"❌ File '{file_name}' not found!")
-                
-                # List all available files
-                st.write("📁 Available files in folder:")
-                all_files = self.list_files_in_folder()
-                if all_files:
-                    for f in all_files:
-                        st.write(f"• {f['name']} ({f.get('size', 'N/A')} bytes)")
-                else:
-                    st.error("No files found at all. Check folder ID and permissions.")
-                
                 return None, f"File '{file_name}' not found"
             
-            file_info = items[0]
-            st.markdown(f"<div class='success-box'><b>✅ Found file:</b> {file_info['name']}<br>ID: {file_info['id']}<br>Size: {file_info.get('size', 'N/A')} bytes</div>", unsafe_allow_html=True)
+            file_id = items[0]['id']
             
             # Download file
-            st.write("⬇️ Starting download...")
-            request = self.service.files().get_media(fileId=file_info['id'])
+            request = self.service.files().get_media(fileId=file_id)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
             while not done:
                 status, done = downloader.next_chunk()
-                if status:
-                    progress = int(status.progress() * 100)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Downloading... {progress}%")
-            
-            progress_bar.empty()
-            status_text.empty()
             
             fh.seek(0)
-            file_size_mb = len(fh.getvalue()) / 1024 / 1024
-            st.success(f"✅ Download complete: {file_size_mb:.2f} MB")
             return fh, None
             
         except Exception as e:
-            st.error(f"❌ Download error: {type(e).__name__}: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
             return None, f"Download error: {e}"
     
     @st.cache_data(ttl=3600, show_spinner="🔄 Loading KSEI Data...")
     def load_ksei_data(_self):
         """Load and process KSEI ownership data"""
-        st.write(f"📥 Loading KSEI file: {FILE_KSEI}")
         fh, error = _self.download_file(FILE_KSEI)
         if error:
-            st.error(f"Failed to load KSEI: {error}")
+            st.error(f"KSEI: {error}")
             return pd.DataFrame()
         
         try:
-            st.write("📊 Processing KSEI CSV...")
             df = pd.read_csv(fh, dtype=object)
-            st.write(f"Raw shape: {df.shape}")
             
             # Basic cleaning
             df.columns = df.columns.str.strip()
@@ -325,7 +309,6 @@ class DataLoader:
             
             # Filter recent data
             df = df[df['Date'].dt.year >= 2024].copy()
-            st.write(f"After year filter: {df.shape}")
             
             # Process numeric columns
             numeric_cols = OWNERSHIP_COLS + OWNERSHIP_CHG_COLS + OWNERSHIP_CHG_RP_COLS + ['Price', 'Free Float', 'Total_Local', 'Total_Foreign']
@@ -355,36 +338,27 @@ class DataLoader:
             # Ensure Stock Code column
             df['Stock Code'] = df['Code']
             
-            st.success(f"✅ KSEI loaded: {df.shape[0]} rows, {df.shape[1]} columns")
-            st.write("Sample data:")
-            st.dataframe(df[['Date', 'Stock Code', 'Price', 'Total_chg_Rp', 'Smart_Money_Flow']].head())
-            
             return df
             
         except Exception as e:
             st.error(f"Error processing KSEI data: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             return pd.DataFrame()
     
     @st.cache_data(ttl=3600, show_spinner="🔄 Loading Historical Data...")
     def load_historical_data(_self):
         """Load and process 1-year historical data"""
-        st.write(f"📥 Loading historical file: {FILE_HIST}")
         fh, error = _self.download_file(FILE_HIST)
         if error:
-            st.error(f"Failed to load historical: {error}")
+            st.error(f"Historical: {error}")
             return pd.DataFrame()
         
         try:
-            st.write("📊 Processing historical CSV...")
             df = pd.read_csv(fh, dtype=object)
-            st.write(f"Raw shape: {df.shape}")
             
             # Basic cleaning
             df.columns = df.columns.str.strip()
             df['Last Trading Date'] = pd.to_datetime(df['Last Trading Date'], errors='coerce')
-            df['Date'] = df['Last Trading Date']  # Alias for merging
+            df['Date'] = df['Last Trading Date']
             
             # Process numeric columns
             numeric_cols = [
@@ -398,7 +372,6 @@ class DataLoader:
             
             for col in numeric_cols:
                 if col in df.columns:
-                    # Clean string values
                     cleaned = df[col].astype(str).str.strip()
                     cleaned = cleaned.str.replace(r'[,\sRp\%]', '', regex=True)
                     df[col] = pd.to_numeric(cleaned, errors='coerce').fillna(0)
@@ -419,38 +392,23 @@ class DataLoader:
             else:
                 df['Sector'] = 'Others'
             
-            st.success(f"✅ Historical loaded: {df.shape[0]} rows, {df.shape[1]} columns")
-            st.write("Sample data:")
-            st.dataframe(df[['Date', 'Stock Code', 'Close', 'Volume', 'Value', 'Change %']].head())
-            
             return df
             
         except Exception as e:
             st.error(f"Error processing historical data: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             return pd.DataFrame()
     
     @st.cache_data(ttl=3600, show_spinner="🔄 Merging Datasets...")
     def load_merged_data(_self):
         """Intelligent merge of both datasets"""
-        st.write("🔄 Starting data merge...")
+        # Load both datasets
+        df_ksei = _self.load_ksei_data()
+        df_hist = _self.load_historical_data()
         
-        with st.spinner("Loading datasets..."):
-            # Load both datasets
-            df_ksei = _self.load_ksei_data()
-            df_hist = _self.load_historical_data()
-        
-        if df_ksei.empty:
-            st.error("KSEI dataset is empty")
-            return pd.DataFrame()
-        
-        if df_hist.empty:
-            st.error("Historical dataset is empty")
+        if df_ksei.empty or df_hist.empty:
             return pd.DataFrame()
         
         try:
-            st.write("🤝 Merging datasets...")
             # Prepare for merge
             df_ksei_m = df_ksei.copy()
             df_hist_m = df_hist.copy()
@@ -458,9 +416,6 @@ class DataLoader:
             # Ensure consistent date format
             df_ksei_m['Date'] = pd.to_datetime(df_ksei_m['Date'])
             df_hist_m['Date'] = pd.to_datetime(df_hist_m['Date'])
-            
-            st.write(f"KSEI dates: {df_ksei_m['Date'].min()} to {df_ksei_m['Date'].max()}")
-            st.write(f"Historical dates: {df_hist_m['Date'].min()} to {df_hist_m['Date'].max()}")
             
             # Merge on Date and Stock Code
             merged = pd.merge(
@@ -473,253 +428,272 @@ class DataLoader:
                 suffixes=('', '_ksei')
             )
             
-            st.write(f"✅ Merge complete: {merged.shape[0]} rows, {merged.shape[1]} columns")
+            # Forward fill KSEI data for continuity
+            ksei_cols = ['Total_chg_Rp', 'Smart_Money_Flow', 'Retail_Flow', 'Institutional_Net', 'Free Float']
+            merged = merged.sort_values(['Stock Code', 'Date'])
             
-            # Show merge statistics
-            st.write("📊 Merge Statistics:")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                matched = merged['Total_chg_Rp'].notna().sum()
-                st.metric("Rows with KSEI data", f"{matched:,}")
+            for col in ksei_cols:
+                if col in merged.columns:
+                    merged[col] = merged.groupby('Stock Code')[col].ffill()
             
-            with col2:
-                total = len(merged)
-                st.metric("Total Rows", f"{total:,}")
+            # Calculate derived metrics
+            merged['Price_Change_1D'] = merged.groupby('Stock Code')['Close'].pct_change()
+            merged['Volume_Change_1D'] = merged.groupby('Stock Code')['Volume'].pct_change()
             
-            with col3:
-                match_percent = (matched / total * 100) if total > 0 else 0
-                st.metric("Match Rate", f"{match_percent:.1f}%")
+            if 'Money Flow Value' in merged.columns:
+                merged['MF_Strength'] = merged['Money Flow Value'] / merged['Value'].replace(0, 1)
             
             return merged
             
         except Exception as e:
             st.error(f"Merge error: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             return pd.DataFrame()
 
 # ==============================================================================
-# 🎯 MAIN APP (DEBUG VERSION)
+# 🎨 SIMPLE DASHBOARD
 # ==============================================================================
-def main():
-    # DEBUG HEADER
+def show_simple_dashboard(loader):
+    """Show a simple dashboard that works"""
     st.markdown("""
     <div class="header-banner">
-        <div class="header-title">🔧 MERGE ANALYTIC - DEBUG MODE</div>
-        <div class="header-subtitle">Data Connection Test & System Check</div>
+        <div class="header-title">🚀 MERGE ANALYTIC KSEI & DAILY TX1Y</div>
+        <div class="header-subtitle">Simple & Working Version</div>
     </div>
     """, unsafe_allow_html=True)
     
-    # SIDEBAR FOR CONTROLS
+    # Sidebar
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/2910/2910312.png", width=60)
-        st.markdown("<h3 style='color:#2B3674;'>🔧 Debug Controls</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='color:#2B3674;'>📊 Dashboard</h3>", unsafe_allow_html=True)
         st.divider()
         
-        st.markdown("##### 🚀 Quick Actions")
-        if st.button("🔄 Clear Cache & Reload", use_container_width=True, type="primary"):
+        if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         
         st.divider()
+        st.markdown("**Data Status:**")
         
-        st.markdown("##### ⚙️ Test Options")
-        test_mode = st.selectbox(
-            "Select Test",
-            ["Full Debug", "Test KSEI Only", "Test Historical Only", "Quick Merge Test"]
-        )
-        
-        st.divider()
-        
-        st.markdown("##### 📁 Folder Info")
-        st.code(f"Folder ID: {FOLDER_ID}")
-        st.code(f"KSEI File: {FILE_KSEI}")
-        st.code(f"Historical File: {FILE_HIST}")
+        # Quick check
+        files = loader.list_files_in_folder()
+        if files:
+            st.success(f"✅ {len(files)} files available")
+            with st.expander("View Files"):
+                for f in files:
+                    st.write(f"📄 {f['name']}")
+        else:
+            st.error("❌ No files found")
     
-    # MAIN DEBUG AREA
-    st.markdown("## 🚨 System Diagnostic")
+    # Main content
+    tab1, tab2, tab3 = st.tabs(["📈 Data Loader", "📊 Analysis", "🔍 Explore"])
     
+    with tab1:
+        st.markdown('<div class="css-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">📥 Data Loading Test</div>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Test Load KSEI", type="primary"):
+                with st.spinner("Loading KSEI data..."):
+                    df_ksei = loader.load_ksei_data()
+                    if not df_ksei.empty:
+                        st.success(f"✅ KSEI loaded: {df_ksei.shape[0]:,} rows")
+                        st.dataframe(df_ksei[['Date', 'Stock Code', 'Price', 'Total_chg_Rp']].head(10))
+                        st.metric("Date Range", f"{df_ksei['Date'].min().date()} to {df_ksei['Date'].max().date()}")
+                    else:
+                        st.error("Failed to load KSEI")
+        
+        with col2:
+            if st.button("Test Load Historical"):
+                with st.spinner("Loading historical data..."):
+                    df_hist = loader.load_historical_data()
+                    if not df_hist.empty:
+                        st.success(f"✅ Historical loaded: {df_hist.shape[0]:,} rows")
+                        st.dataframe(df_hist[['Date', 'Stock Code', 'Close', 'Volume', 'Value']].head(10))
+                        st.metric("Date Range", f"{df_hist['Date'].min().date()} to {df_hist['Date'].max().date()}")
+                    else:
+                        st.error("Failed to load historical")
+        
+        # Merge test
+        st.markdown("---")
+        if st.button("🚀 Merge Both Datasets", type="primary"):
+            with st.spinner("Merging datasets..."):
+                df_merged = loader.load_merged_data()
+                if not df_merged.empty:
+                    st.success(f"🎉 MERGE SUCCESS! {df_merged.shape[0]:,} rows × {df_merged.shape[1]:,} columns")
+                    
+                    # Show stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Unique Stocks", df_merged['Stock Code'].nunique())
+                    with col2:
+                        st.metric("Date Range", f"{df_merged['Date'].min().date()} to {df_merged['Date'].max().date()}")
+                    with col3:
+                        match_rate = (df_merged['Total_chg_Rp'].notna().sum() / len(df_merged) * 100)
+                        st.metric("KSEI Match", f"{match_rate:.1f}%")
+                    
+                    # Save to session for other tabs
+                    st.session_state.df_merged = df_merged
+                    st.session_state.data_loaded = True
+                    
+                    # Show sample
+                    with st.expander("View Sample Data"):
+                        st.dataframe(df_merged.head(20))
+                else:
+                    st.error("Merge failed")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with tab2:
+        st.markdown('<div class="css-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">📊 Quick Analysis</div>', unsafe_allow_html=True)
+        
+        if 'data_loaded' in st.session_state and st.session_state.data_loaded:
+            df = st.session_state.df_merged
+            
+            # Date selector
+            latest_dates = sorted(df['Date'].unique(), reverse=True)[:10]
+            selected_date = st.selectbox(
+                "Select Date",
+                options=latest_dates,
+                format_func=lambda x: x.strftime('%d %b %Y'),
+                index=0
+            )
+            
+            if selected_date:
+                daily = df[df['Date'] == selected_date]
+                
+                # Top metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    top_gainer = daily.nlargest(1, 'Change %')
+                    if not top_gainer.empty:
+                        st.metric("📈 Top Gainer", 
+                                 top_gainer.iloc[0]['Stock Code'],
+                                 delta=f"{top_gainer.iloc[0]['Change %']:.2f}%")
+                
+                with col2:
+                    top_value = daily.nlargest(1, 'Value')
+                    if not top_value.empty:
+                        st.metric("💰 Top Value", 
+                                 f"Rp {top_value.iloc[0]['Value']/1e9:.1f}B",
+                                 top_value.iloc[0]['Stock Code'])
+                
+                with col3:
+                    if 'Smart_Money_Flow' in daily.columns:
+                        top_smart = daily.nlargest(1, 'Smart_Money_Flow')
+                        if not top_smart.empty:
+                            st.metric("🧠 Top Smart Money", 
+                                     top_smart.iloc[0]['Stock Code'],
+                                     delta=f"Rp {top_smart.iloc[0]['Smart_Money_Flow']/1e9:.1f}B")
+                
+                # Charts
+                st.markdown("#### 📈 Top 10 by Smart Money Flow")
+                if 'Smart_Money_Flow' in daily.columns:
+                    top_smart_10 = daily.nlargest(10, 'Smart_Money_Flow')
+                    if not top_smart_10.empty:
+                        fig = px.bar(
+                            top_smart_10,
+                            x='Stock Code',
+                            y='Smart_Money_Flow',
+                            color='Smart_Money_Flow',
+                            color_continuous_scale='Greens',
+                            title=f"Smart Money Flow - {selected_date.strftime('%d %b %Y')}"
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("👆 Please load and merge data first in the Data Loader tab")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with tab3:
+        st.markdown('<div class="css-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">🔍 Data Explorer</div>', unsafe_allow_html=True)
+        
+        if 'data_loaded' in st.session_state and st.session_state.data_loaded:
+            df = st.session_state.df_merged
+            
+            # Stock selector
+            stocks = sorted(df['Stock Code'].unique())
+            selected_stock = st.selectbox("Select Stock", stocks)
+            
+            if selected_stock:
+                stock_data = df[df['Stock Code'] == selected_stock].sort_values('Date')
+                
+                if not stock_data.empty:
+                    # Latest info
+                    latest = stock_data.iloc[-1]
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Price", f"Rp {latest.get('Close', 0):,.0f}")
+                    with col2:
+                        st.metric("Change", f"{latest.get('Change %', 0):.2f}%")
+                    with col3:
+                        if 'Smart_Money_Flow' in latest:
+                            st.metric("Smart Money", f"Rp {latest['Smart_Money_Flow']/1e9:.1f}B")
+                    with col4:
+                        st.metric("Sector", latest.get('Sector', 'N/A'))
+                    
+                    # Price chart
+                    st.markdown("#### 📈 Price History")
+                    fig = px.line(
+                        stock_data,
+                        x='Date',
+                        y='Close',
+                        title=f"{selected_stock} Price History"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Show data
+                    with st.expander("View Raw Data"):
+                        st.dataframe(stock_data)
+        else:
+            st.info("👆 Please load and merge data first")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==============================================================================
+# 🚀 MAIN APP
+# ==============================================================================
+def main():
     # Initialize loader
-    st.write("### 1. Initializing Google Drive Connection")
     loader = DataLoader()
     
     if not loader.service:
-        st.error("❌ FAILED: GDrive service not initialized")
+        st.error("❌ Failed to initialize Google Drive service")
         st.markdown("""
-        **Possible fixes:**
-        1. Check `secrets.toml` format
-        2. Verify service account email has access to folder
-        3. Check if JSON key is valid
-        """)
-        return
-    
-    st.success("✅ Google Drive service initialized")
-    
-    # List files
-    st.write("### 2. Checking Folder Contents")
-    files = loader.list_files_in_folder()
-    
-    if not files:
-        st.error("❌ No files found in folder!")
-        st.markdown(f"""
-        **Troubleshooting:**
-        1. Folder ID: `{FOLDER_ID}`
-        2. Service account: `streamlit-to-gdrive@stock-analysis-461503.iam.gserviceaccount.com`
-        3. Check sharing permissions
-        """)
-        return
-    
-    st.success(f"✅ Found {len(files)} file(s)")
-    
-    # Display files
-    with st.expander("📁 View All Files"):
-        for file in files:
-            st.write(f"**{file['name']}**")
-            st.write(f"  • ID: `{file['id']}`")
-            st.write(f"  • Size: {file.get('size', 'N/A')} bytes")
-            st.write(f"  • Type: {file.get('mimeType', 'N/A')}")
-            st.write("---")
-    
-    # Test downloads based on mode
-    st.write("### 3. Testing File Downloads")
-    
-    if test_mode == "Test KSEI Only" or test_mode == "Full Debug":
-        st.markdown(f"#### 📥 Testing KSEI: `{FILE_KSEI}`")
-        if st.button(f"Download {FILE_KSEI}", key="dl_ksei"):
-            with st.spinner(f"Downloading {FILE_KSEI}..."):
-                fh, error = loader.download_file(FILE_KSEI)
-                if fh:
-                    st.success(f"✅ SUCCESS: {len(fh.getvalue()) / 1024 / 1024:.2f} MB")
-                    # Try to read
-                    try:
-                        df = pd.read_csv(fh, nrows=10)
-                        st.write("First 10 rows:")
-                        st.dataframe(df)
-                    except Exception as e:
-                        st.error(f"CSV read error: {e}")
-                else:
-                    st.error(f"❌ FAILED: {error}")
-    
-    if test_mode == "Test Historical Only" or test_mode == "Full Debug":
-        st.markdown(f"#### 📥 Testing Historical: `{FILE_HIST}`")
-        if st.button(f"Download {FILE_HIST}", key="dl_hist"):
-            with st.spinner(f"Downloading {FILE_HIST}..."):
-                fh, error = loader.download_file(FILE_HIST)
-                if fh:
-                    st.success(f"✅ SUCCESS: {len(fh.getvalue()) / 1024 / 1024:.2f} MB")
-                    # Try to read
-                    try:
-                        df = pd.read_csv(fh, nrows=10)
-                        st.write("First 10 rows:")
-                        st.dataframe(df)
-                    except Exception as e:
-                        st.error(f"CSV read error: {e}")
-                else:
-                    st.error(f"❌ FAILED: {error}")
-    
-    # Full merge test
-    if test_mode == "Quick Merge Test" or test_mode == "Full Debug":
-        st.write("### 4. Testing Full Data Merge")
+        ### 🔧 Troubleshooting Steps:
         
-        if st.button("🚀 Run Full Data Pipeline", type="primary"):
-            with st.spinner("Running full pipeline..."):
-                merged_data = loader.load_merged_data()
-            
-            if not merged_data.empty:
-                st.success(f"🎉 MERGE SUCCESSFUL! {merged_data.shape[0]:,} rows × {merged_data.shape[1]:,} columns")
-                
-                # Show summary
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Unique Stocks", merged_data['Stock Code'].nunique())
-                with col2:
-                    date_range = f"{merged_data['Date'].min().date()} to {merged_data['Date'].max().date()}"
-                    st.metric("Date Range", date_range)
-                with col3:
-                    st.metric("Total Rows", f"{len(merged_data):,}")
-                
-                # Show sample
-                with st.expander("🔍 View Sample Data"):
-                    st.dataframe(merged_data.head(20))
-                
-                # Show columns
-                with st.expander("📋 View All Columns"):
-                    cols_df = pd.DataFrame({
-                        'Column': merged_data.columns,
-                        'Type': merged_data.dtypes.astype(str),
-                        'Non-Null': merged_data.count().values,
-                        'Null %': (merged_data.isnull().sum().values / len(merged_data) * 100).round(1)
-                    })
-                    st.dataframe(cols_df)
-                
-                # Launch main dashboard button
-                st.markdown("---")
-                if st.button("🚀 Launch Main Dashboard", type="primary"):
-                    # Switch to main app mode
-                    st.session_state.debug_mode = False
-                    st.rerun()
-            else:
-                st.error("❌ Merge failed or returned empty dataset")
-    
-    # If debug mode is off, show main app
-    if 'debug_mode' in st.session_state and not st.session_state.debug_mode:
-        show_main_dashboard(loader)
-    
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #A3AED0; font-size: 14px;'>"
-        "🔧 Debug Mode • Check data connections before analysis"
-        "</div>",
-        unsafe_allow_html=True
-    )
-
-# ==============================================================================
-# 🎨 MAIN DASHBOARD (Will be shown after debug)
-# ==============================================================================
-def show_main_dashboard(loader):
-    """Show the main dashboard after debug passes"""
-    st.markdown("""
-    <div class="header-banner">
-        <div class="header-title">🚀 MERGE ANALYTIC KSEI & DAILY TX1Y</div>
-        <div class="header-subtitle">Hidden Gem Finder • Institutional Flow Analysis • Multi-dimensional Scoring</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Load merged data
-    with st.spinner("🚀 Loading merged dataset..."):
-        df_merged = loader.load_merged_data()
-    
-    if df_merged.empty:
-        st.error("Failed to load data. Please check debug mode first.")
-        if st.button("🔧 Enter Debug Mode"):
-            st.session_state.debug_mode = True
-            st.rerun()
+        1. **Check secrets.toml** - Make sure it's in `.streamlit/secrets.toml`
+        2. **Format should be:**
+        ```toml
+        gcp_service_account = '''
+        {
+          "type": "service_account",
+          "project_id": "...",
+          "private_key_id": "...",
+          "private_key": "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n",
+          ...
+        }
+        '''
+        ```
+        
+        3. **Verify sharing** - Folder is shared with:  
+           `streamlit-to-gdrive@stock-analysis-461503.iam.gserviceaccount.com`
+        
+        4. **File names** - Ensure they exist:  
+           • `KSEI_Shareholder_Processed.csv`  
+           • `Kompilasi_Data_1Tahun.csv`
+        """)
         return
     
-    # Continue with the rest of your dashboard...
-    # ... [Insert the rest of your dashboard code here] ...
-    
-    st.success("✅ Dashboard loaded successfully!")
-    st.write(f"Data: {df_merged.shape[0]:,} rows × {df_merged.shape[1]:,} columns")
+    # Show dashboard
+    show_simple_dashboard(loader)
 
 # ==============================================================================
 # 🚀 RUN APP
 # ==============================================================================
 if __name__ == "__main__":
-    # Initialize session state
-    if 'debug_mode' not in st.session_state:
-        st.session_state.debug_mode = True  # Start in debug mode
-    
-    # Run appropriate mode
-    if st.session_state.debug_mode:
-        main()
-    else:
-        # Initialize loader and show dashboard
-        loader = DataLoader()
-        if loader.service:
-            show_main_dashboard(loader)
-        else:
-            st.error("Failed to initialize. Entering debug mode...")
-            st.session_state.debug_mode = True
-            st.rerun()
+    main()
