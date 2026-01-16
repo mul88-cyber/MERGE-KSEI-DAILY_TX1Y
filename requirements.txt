@@ -11,3 +11,4 @@ requests>=2.31.0
 scipy>=1.11.0
 ta>=0.10.0
 pyportfolioopt>=1.5.5
+matplotlib
