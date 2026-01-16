@@ -994,8 +994,14 @@ def main():
         min_gem_score = st.slider("Minimum Score", 50, 90, 65, 5)
         top_n_gems = st.slider("Top N Results", 10, 50, 25, 5)
         
-        # Sector filter
-        sectors = ['All'] + sorted(df_merged['Sector'].unique().tolist())
+        # Sector filter - FIX: Handle NaN/Float values before sorting
+        # 1. Ambil unique values
+        # 2. Convert semua ke string (.astype(str)) untuk mencegah error comparison
+        # 3. Ganti 'nan' string dengan 'Others' jika ada
+        raw_sectors = df_merged['Sector'].dropna().unique()
+        clean_sectors = [str(x) for x in raw_sectors if str(x).lower() != 'nan']
+
+        sectors = ['All'] + sorted(clean_sectors)
         selected_sector = st.selectbox("Sector Filter", sectors)
         
         # Advanced filters
