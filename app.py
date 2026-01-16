@@ -802,24 +802,26 @@ def create_gem_radar_chart(scores, stock_code, signal):
     return fig
 
 def create_ownership_timeline(df, stock_code):
-    """Create timeline of ownership changes"""
+    """Create timeline of ownership changes (FIXED VERSION)"""
     stock_data = df[df['Stock Code'] == stock_code].sort_values('Date')
     
     if stock_data.empty:
         return None
     
+    # 1. Definisikan Layout Subplot dengan Benar
     fig = make_subplots(
         rows=3, cols=1,
         subplot_titles=(
-            f'{stock_code} - Price', 
-            'Smart Money Flow (B) - MONTHLY', 
-            'Institutional vs Retail Flow (B)'
+            f'{stock_code} - Price History', 
+            'Smart Money Flow (B) - Monthly', 
+            'Institutional vs Retail Net Flow (B)'
         ),
-        vertical_spacing=0.1,
-        row_heights=[0.4, 0.3, 0.3]
+        vertical_spacing=0.08,
+        row_heights=[0.5, 0.25, 0.25], # Harga lebih besar
+        shared_xaxes=True # Sumbu X sinkron
     )
     
-    # Price chart
+    # --- ROW 1: PRICE CHART ---
     fig.add_trace(
         go.Scatter(
             x=stock_data['Date'], 
@@ -831,52 +833,55 @@ def create_ownership_timeline(df, stock_code):
         row=1, col=1
     )
     
-    # Smart Money bars (monthly)
+    # --- ROW 2: SMART MONEY (MONTHLY) ---
     if 'Smart_Money_Flow' in stock_data.columns:
-        # Highlight month-end data points
+        # Ambil data akhir bulan saja agar grafik tidak 'berisik'
         month_ends = stock_data[stock_data['Date'].dt.is_month_end]
         if not month_ends.empty:
             colors = ['#05CD99' if x > 0 else '#EE5D50' for x in month_ends['Smart_Money_Flow']]
             fig.add_trace(
                 go.Bar(
                     x=month_ends['Date'], 
-                    y=month_ends['Smart_Money_Flow'] / 1e9,
+                    y=month_ends['Smart_Money_Flow'] / 1e9, 
                     name='Smart Money (B)', 
                     marker_color=colors,
-                    opacity=0.7
+                    opacity=0.8
                 ),
-                row=2, col=1
+                row=2, col=1 # PASTIKAN INI ROW 2, BUKAN ROW 1
             )
     
-    # Institutional vs Retail
+    # --- ROW 3: INSTITUTIONAL VS RETAIL ---
+    # Institutional Bar
     if 'Institutional_Net' in stock_data.columns:
-        month_ends_institutional = stock_data[stock_data['Date'].dt.is_month_end]
-        if not month_ends_institutional.empty:
+        month_ends_inst = stock_data[stock_data['Date'].dt.is_month_end]
+        if not month_ends_inst.empty:
             fig.add_trace(
                 go.Bar(
-                    x=month_ends_institutional['Date'], 
-                    y=month_ends_institutional['Institutional_Net'] / 1e9,
-                    name='Institutional Net (B)', 
+                    x=month_ends_inst['Date'], 
+                    y=month_ends_inst['Institutional_Net'] / 1e9, 
+                    name='Institusi Net (B)', 
                     marker_color='#4318FF',
-                    opacity=0.7
+                    opacity=0.6
                 ),
                 row=3, col=1
             )
     
+    # Retail Line
     if 'Retail_Flow' in stock_data.columns:
-        month_ends_retail = stock_data[stock_data['Date'].dt.is_month_end]
-        if not month_ends_retail.empty:
+        month_ends_ret = stock_data[stock_data['Date'].dt.is_month_end]
+        if not month_ends_ret.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=month_ends_retail['Date'], 
-                    y=month_ends_retail['Retail_Flow'] / 1e9,
+                    x=month_ends_ret['Date'], 
+                    y=month_ends_ret['Retail_Flow'] / 1e9, 
                     name='Retail Flow (B)', 
-                    line=dict(color='#EE5D50', width=2),
+                    line=dict(color='#EE5D50', width=2, dash='dot'),
                     mode='lines+markers'
                 ),
                 row=3, col=1
             )
     
+    # Update Layout
     fig.update_layout(
         height=700,
         showlegend=True,
@@ -884,9 +889,11 @@ def create_ownership_timeline(df, stock_code):
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color='#2B3674'),
         hovermode='x unified',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=10, t=40, b=10)
     )
     
+    # Grid Styling
     fig.update_xaxes(showgrid=True, gridcolor='#E0E5F2')
     fig.update_yaxes(showgrid=True, gridcolor='#E0E5F2')
     
