@@ -1,5 +1,5 @@
 # ==============================================================================
-# 📦 IMPORTS (Tambahan untuk analisis)
+# 🚀 FINAL: HIDDEN GEM FINDER - KSEI MONTHLY + DAILY TX1Y MERGE
 # ==============================================================================
 import streamlit as st
 import pandas as pd
@@ -25,10 +25,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # ==============================================================================
-# ⚙️ PAGE CONFIG & CSS (SAME)
+# ⚙️ PAGE CONFIG & CSS
 # ==============================================================================
 st.set_page_config(
-    page_title="🚀 HIDDEN GEM FINDER - KSEI & TX1Y MERGE",
+    page_title="💎 HIDDEN GEM FINDER - KSEI & TX1Y",
     layout="wide",
     page_icon="💎",
     initial_sidebar_state="expanded"
@@ -119,6 +119,8 @@ st.markdown("""
     .signal-buy { background-color: #D1FAE5; color: #065F46; padding: 4px 8px; border-radius: 10px; font-weight: bold; }
     .signal-sell { background-color: #FEE2E2; color: #991B1B; padding: 4px 8px; border-radius: 10px; font-weight: bold; }
     .signal-neutral { background-color: #E5E7EB; color: #4B5563; padding: 4px 8px; border-radius: 10px; font-weight: bold; }
+    .data-point-monthly { background-color: #DBEAFE; color: #1E40AF; padding: 2px 6px; border-radius: 6px; font-size: 11px; }
+    .data-point-daily { background-color: #D1FAE5; color: #065F46; padding: 2px 6px; border-radius: 6px; font-size: 11px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -145,7 +147,7 @@ SMART_MONEY_COLS = [
 RETAIL_COLS = ['Local ID_chg_Rp']
 
 # ==============================================================================
-# 📦 DATA LOADER CLASS (SAME AS BEFORE - WORKING VERSION)
+# 📦 DATA LOADER CLASS - MONTHLY + DAILY MERGE
 # ==============================================================================
 class DataLoader:
     def __init__(self):
@@ -155,50 +157,40 @@ class DataLoader:
     def parse_creds_from_secrets(self, creds_data):
         """Robust parsing of credentials from Streamlit secrets"""
         try:
-            # Case 1: Already a dict (local development)
             if isinstance(creds_data, dict):
                 return creds_data
             
-            # Case 2: String that needs parsing
             if isinstance(creds_data, str):
-                # Clean the string
                 creds_str = creds_data.strip()
                 
-                # Remove wrapping quotes
                 if (creds_str.startswith("'") and creds_str.endswith("'")) or \
                    (creds_str.startswith('"') and creds_str.endswith('"')):
                     creds_str = creds_str[1:-1]
                 
-                # Remove triple quotes if present
                 if creds_str.startswith("'''") and creds_str.endswith("'''"):
                     creds_str = creds_str[3:-3]
                 elif creds_str.startswith('"""') and creds_str.endswith('"""'):
                     creds_str = creds_str[3:-3]
                 
-                # Fix escaped characters
                 creds_str = creds_str.replace('\\n', '\n').replace('\\\\n', '\n')
                 creds_str = creds_str.replace('\\"', '"').replace("\\'", "'")
                 
-                # Try JSON parsing first
                 try:
                     return json.loads(creds_str)
                 except json.JSONDecodeError:
-                    # Try ast.literal_eval for Python-style strings
                     try:
+                        import ast
                         return ast.literal_eval(creds_str)
                     except:
-                        # Last resort: regex extraction
                         import re
                         json_match = re.search(r'\{.*\}', creds_str, re.DOTALL)
                         if json_match:
                             json_str = json_match.group(0)
-                            # Fix newlines in the JSON string
                             json_str = json_str.replace('\n', '\\n')
                             return json.loads(json_str)
                         else:
                             raise ValueError("Could not parse credentials string")
             
-            # Case 3: Base64 encoded
             if isinstance(creds_data, str) and len(creds_data) > 100 and '=' in creds_data[-2:]:
                 try:
                     decoded = base64.b64decode(creds_data).decode('utf-8')
@@ -215,34 +207,27 @@ class DataLoader:
     def initialize_gdrive(self):
         """Initialize Google Drive service with Streamlit secrets"""
         try:
-            # Get credentials from secrets
             if "gcp_service_account" not in st.secrets:
                 st.error("❌ 'gcp_service_account' not found in secrets.toml")
                 return False
             
             creds_data = st.secrets["gcp_service_account"]
-            
-            # Parse credentials
             creds_json = self.parse_creds_from_secrets(creds_data)
             if creds_json is None:
                 return False
             
-            # Create credentials object
             creds = Credentials.from_service_account_info(
                 creds_json, 
                 scopes=['https://www.googleapis.com/auth/drive.readonly']
             )
             
-            # Build service
             self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             
-            # Test the service
             try:
                 about = self.service.about().get(fields="user").execute()
                 st.success(f"✅ Google Drive authenticated: {about.get('user', {}).get('emailAddress', 'Service Account')}")
             except Exception as test_err:
                 st.warning(f"⚠️ Auth test: {test_err}")
-                # Continue anyway
             
             return True
             
@@ -275,7 +260,6 @@ class DataLoader:
             return None, "Service not initialized"
         
         try:
-            # Search for file
             query = f"'{FOLDER_ID}' in parents and name='{file_name}' and trashed=false"
             results = self.service.files().list(q=query, fields="files(id, name)", pageSize=1).execute()
             items = results.get('files', [])
@@ -284,8 +268,6 @@ class DataLoader:
                 return None, f"File '{file_name}' not found"
             
             file_id = items[0]['id']
-            
-            # Download file
             request = self.service.files().get_media(fileId=file_id)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
@@ -300,9 +282,9 @@ class DataLoader:
         except Exception as e:
             return None, f"Download error: {e}"
     
-    @st.cache_data(ttl=3600, show_spinner="🔄 Loading KSEI Data...")
+    @st.cache_data(ttl=3600, show_spinner="📅 Loading Monthly KSEI Data...")
     def load_ksei_data(_self):
-        """Load and process KSEI ownership data"""
+        """Load and process MONTHLY KSEI ownership data"""
         fh, error = _self.download_file(FILE_KSEI)
         if error:
             st.error(f"KSEI: {error}")
@@ -310,21 +292,17 @@ class DataLoader:
         
         try:
             df = pd.read_csv(fh, dtype=object)
+            st.write(f"📅 KSEI Monthly Data: {df.shape[0]} rows loaded")
             
-            # Basic cleaning
             df.columns = df.columns.str.strip()
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df[df['Date'].dt.year >= 2023].copy()
             
-            # Filter recent data
-            df = df[df['Date'].dt.year >= 2024].copy()
-            
-            # Process numeric columns
             numeric_cols = OWNERSHIP_COLS + OWNERSHIP_CHG_COLS + OWNERSHIP_CHG_RP_COLS + ['Price', 'Free Float', 'Total_Local', 'Total_Foreign']
             for col in numeric_cols:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
             
-            # Calculate additional metrics
             local_cols = [c for c in OWNERSHIP_CHG_RP_COLS if 'Local' in c and c in df.columns]
             foreign_cols = [c for c in OWNERSHIP_CHG_RP_COLS if 'Foreign' in c and c in df.columns]
             
@@ -332,33 +310,28 @@ class DataLoader:
             df['Total_Foreign_chg_Rp'] = df[foreign_cols].sum(axis=1) if foreign_cols else 0
             df['Total_chg_Rp'] = df['Total_Local_chg_Rp'] + df['Total_Foreign_chg_Rp']
             
-            # Add Smart Money total
             smart_cols = [c for c in SMART_MONEY_COLS if c in df.columns]
             df['Smart_Money_Flow'] = df[smart_cols].sum(axis=1) if smart_cols else 0
             
-            # Add Retail total
             retail_cols = [c for c in RETAIL_COLS if c in df.columns]
             df['Retail_Flow'] = df[retail_cols].sum(axis=1) if retail_cols else 0
             
-            # Calculate net institutional flow
             df['Institutional_Net'] = df['Smart_Money_Flow'] - df['Retail_Flow']
-            
-            # Ensure Stock Code column
             df['Stock Code'] = df['Code']
             
-            # Calculate ownership concentration
             if 'Free Float' in df.columns:
-                df['Ownership_Concentration'] = 100 - df['Free Float']  # Higher = more concentrated
+                df['Ownership_Concentration'] = 100 - df['Free Float']
             
+            st.success(f"✅ KSEI Monthly: {df['Date'].min().date()} to {df['Date'].max().date()}")
             return df
             
         except Exception as e:
             st.error(f"Error processing KSEI data: {e}")
             return pd.DataFrame()
     
-    @st.cache_data(ttl=3600, show_spinner="🔄 Loading Historical Data...")
+    @st.cache_data(ttl=3600, show_spinner="📈 Loading Daily Historical Data...")
     def load_historical_data(_self):
-        """Load and process 1-year historical data"""
+        """Load and process DAILY historical data"""
         fh, error = _self.download_file(FILE_HIST)
         if error:
             st.error(f"Historical: {error}")
@@ -366,13 +339,12 @@ class DataLoader:
         
         try:
             df = pd.read_csv(fh, dtype=object)
+            st.write(f"📈 Daily Historical Data: {df.shape[0]} rows loaded")
             
-            # Basic cleaning
             df.columns = df.columns.str.strip()
             df['Last Trading Date'] = pd.to_datetime(df['Last Trading Date'], errors='coerce')
             df['Date'] = df['Last Trading Date']
             
-            # Process numeric columns
             numeric_cols = [
                 'High', 'Low', 'Close', 'Volume', 'Value', 'Foreign Buy', 'Foreign Sell',
                 'Bid Volume', 'Offer Volume', 'Previous', 'Change', 'Open Price', 'First Trade',
@@ -388,71 +360,47 @@ class DataLoader:
                     cleaned = cleaned.str.replace(r'[,\sRp\%]', '', regex=True)
                     df[col] = pd.to_numeric(cleaned, errors='coerce').fillna(0)
             
-            # Calculate NFF in Rupiah
             if 'Typical Price' in df.columns:
                 df['NFF_Rp'] = df['Net Foreign Flow'] * df['Typical Price']
             else:
                 df['NFF_Rp'] = df['Net Foreign Flow'] * df['Close']
             
-            # Handle boolean columns
             if 'Unusual Volume' in df.columns:
                 df['Unusual Volume'] = df['Unusual Volume'].astype(str).str.strip().str.lower().isin(['spike volume signifikan', 'true'])
             
-            # Ensure Sector column
             if 'Sector' in df.columns:
                 df['Sector'] = df['Sector'].astype(str).str.strip().fillna('Others')
             else:
                 df['Sector'] = 'Others'
             
-            # Calculate technical indicators - FIXED VERSION
             if 'Close' in df.columns:
-                # Calculate moving averages
                 df['Price_MA20'] = df.groupby('Stock Code')['Close'].transform(lambda x: x.rolling(20, min_periods=5).mean())
                 df['Price_MA50'] = df.groupby('Stock Code')['Close'].transform(lambda x: x.rolling(50, min_periods=10).mean())
                 
-                # Define RSI calculation function INSIDE this method
-                def calculate_rsi_for_group(prices, period=14):
-                    """Calculate RSI for a price series"""
+                def calculate_rsi(prices, period=14):
                     if len(prices) < period + 1:
-                        # Return series of 50s with same length as input
                         return pd.Series([50] * len(prices), index=prices.index)
-                    
-                    # Calculate price changes
                     delta = prices.diff()
-                    
-                    # Separate gains and losses
                     gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
                     loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
-                    
-                    # Avoid division by zero
                     loss = loss.replace(0, np.nan)
-                    
-                    # Calculate RS and RSI
                     rs = gain / loss
                     rsi = 100 - (100 / (1 + rs))
-                    
-                    # Fill NaN values with 50
-                    rsi = rsi.fillna(50)
-                    
-                    # Ensure RSI stays between 0-100
-                    rsi = rsi.clip(0, 100)
-                    
+                    rsi = rsi.fillna(50).clip(0, 100)
                     return rsi
                 
-                # Apply RSI calculation to each stock group
-                df['RSI_14'] = df.groupby('Stock Code')['Close'].transform(calculate_rsi_for_group)
+                df['RSI_14'] = df.groupby('Stock Code')['Close'].transform(calculate_rsi)
             
+            st.success(f"✅ Daily Historical: {df['Date'].min().date()} to {df['Date'].max().date()}")
             return df
             
         except Exception as e:
             st.error(f"Error processing historical data: {e}")
             return pd.DataFrame()
     
-    
-    @st.cache_data(ttl=3600, show_spinner="🔄 Merging Datasets...")
+    @st.cache_data(ttl=3600, show_spinner="🔄 Merging Monthly KSEI + Daily Data...")
     def load_merged_data(_self):
-        """Intelligent merge of both datasets"""
-        # Load both datasets
+        """Intelligent merge of MONTHLY KSEI + DAILY historical data"""
         df_ksei = _self.load_ksei_data()
         df_hist = _self.load_historical_data()
         
@@ -460,53 +408,84 @@ class DataLoader:
             return pd.DataFrame()
         
         try:
-            # Prepare for merge
+            # Prepare data
             df_ksei_m = df_ksei.copy()
             df_hist_m = df_hist.copy()
             
-            # Ensure consistent date format
             df_ksei_m['Date'] = pd.to_datetime(df_ksei_m['Date'])
             df_hist_m['Date'] = pd.to_datetime(df_hist_m['Date'])
             
-            # Merge on Date and Stock Code
+            # Create complete date-stock grid
+            all_dates = pd.date_range(
+                start=df_hist_m['Date'].min(), 
+                end=df_hist_m['Date'].max(), 
+                freq='D'
+            )
+            all_stocks = pd.Series(pd.unique(df_hist_m['Stock Code'])).dropna()
+            
+            date_stock_grid = pd.MultiIndex.from_product(
+                [all_dates, all_stocks],
+                names=['Date', 'Stock Code']
+            )
+            complete_grid = pd.DataFrame(index=date_stock_grid).reset_index()
+            
+            # Merge daily data first
             merged = pd.merge(
+                complete_grid,
                 df_hist_m,
-                df_ksei_m[['Date', 'Stock Code', 'Total_chg_Rp', 'Smart_Money_Flow', 
-                          'Retail_Flow', 'Institutional_Net', 'Free Float', 'Sector',
-                          'Ownership_Concentration'] + 
-                         [c for c in OWNERSHIP_COLS if c in df_ksei_m.columns]],
                 on=['Date', 'Stock Code'],
-                how='left',
-                suffixes=('', '_ksei')
+                how='left'
             )
             
-            # Forward fill KSEI data for continuity
-            ksei_cols = ['Total_chg_Rp', 'Smart_Money_Flow', 'Retail_Flow', 'Institutional_Net', 
-                        'Free Float', 'Ownership_Concentration']
             merged = merged.sort_values(['Stock Code', 'Date'])
             
+            # KSEI columns to forward fill (MONTHLY -> DAILY)
+            ksei_cols = [
+                'Total_chg_Rp', 'Smart_Money_Flow', 'Retail_Flow', 
+                'Institutional_Net', 'Free Float', 'Sector',
+                'Ownership_Concentration', 'Price'
+            ]
+            ksei_cols = [col for col in ksei_cols if col in df_ksei_m.columns]
+            
+            # Forward fill monthly KSEI data to daily
             for col in ksei_cols:
-                if col in merged.columns:
-                    merged[col] = merged.groupby('Stock Code')[col].ffill()
+                temp_ksei = df_ksei_m[['Date', 'Stock Code', col]].copy()
+                temp_ksei = temp_ksei.dropna(subset=[col])
+                
+                merged = pd.merge(
+                    merged,
+                    temp_ksei,
+                    on=['Date', 'Stock Code'],
+                    how='left',
+                    suffixes=('', '_ksei_raw')
+                )
+                
+                merged[col] = merged.groupby('Stock Code')[f'{col}_ksei_raw'].ffill()
+                merged = merged.drop(columns=[f'{col}_ksei_raw'])
+            
+            # Fill missing Close with KSEI Price
+            if 'Price' in merged.columns and 'Close' in merged.columns:
+                merged['Close'] = merged['Close'].fillna(merged['Price'])
             
             # Calculate derived metrics
             merged['Price_Change_1D'] = merged.groupby('Stock Code')['Close'].pct_change()
             merged['Volume_Change_1D'] = merged.groupby('Stock Code')['Volume'].pct_change()
             
-            if 'Money Flow Value' in merged.columns:
+            if 'Money Flow Value' in merged.columns and 'Value' in merged.columns:
                 merged['MF_Strength'] = merged['Money Flow Value'] / merged['Value'].replace(0, 1)
             
-            # Calculate trend indicators
-            merged['Price_Trend_20D'] = merged.groupby('Stock Code')['Close'].transform(
-                lambda x: (x.iloc[-1] / x.rolling(20).mean().iloc[-1] - 1) * 100 if len(x) >= 20 else 0
-            )
+            # Remove rows with no trading data
+            merged = merged.dropna(subset=['Close', 'Volume'], how='all')
             
-            # Calculate Smart Money Accumulation Score
-            merged['SM_Accum_Score'] = merged.groupby('Stock Code')['Smart_Money_Flow'].transform(
-                lambda x: x.rolling(30, min_periods=10).sum() / 1e9  # In billions
-            )
+            # Add data type flags
+            merged['Has_KSEI_Data'] = merged['Smart_Money_Flow'].notna()
+            merged['Has_Daily_Data'] = merged['Close'].notna()
             
-            st.success(f"✅ Merged dataset loaded: {merged.shape[0]:,} rows, {merged.shape[1]:,} columns")
+            st.success(f"✅ MERGE COMPLETE: {merged.shape[0]:,} rows × {merged.shape[1]:,} columns")
+            st.write(f"📅 Date Range: {merged['Date'].min().date()} to {merged['Date'].max().date()}")
+            st.write(f"📊 Stocks: {merged['Stock Code'].nunique():,}")
+            st.write(f"📈 KSEI Coverage: {(merged['Has_KSEI_Data'].sum() / len(merged) * 100):.1f}%")
+            
             return merged
             
         except Exception as e:
@@ -514,150 +493,192 @@ class DataLoader:
             return pd.DataFrame()
 
 # ==============================================================================
-# 🎯 HIDDEN GEM ANALYZER
+# 🎯 HIDDEN GEM ANALYZER - MONTHLY + DAILY INTELLIGENCE
 # ==============================================================================
 class HiddenGemAnalyzer:
     def __init__(self, df_merged):
         self.df = df_merged.copy()
         self.latest_date = self.df['Date'].max()
+        
+    def get_monthly_ksei_data(self, stock_data):
+        """Extract and process monthly KSEI data points"""
+        # Identify month-end dates (approximate monthly data)
+        stock_data = stock_data.copy()
+        stock_data['Month'] = stock_data['Date'].dt.to_period('M')
+        
+        # Get unique monthly records (take last record of each month)
+        monthly_data = stock_data.dropna(subset=['Smart_Money_Flow']).copy()
+        if not monthly_data.empty:
+            monthly_data = monthly_data.sort_values('Date').groupby('Month').last().reset_index()
+        
+        return monthly_data
     
-    def calculate_gem_score(self, stock_code, lookback_days=60):
-        """Calculate Hidden Gem Score (0-100) for a stock"""
+    def calculate_gem_score(self, stock_code, lookback_days=90):
+        """Calculate Hidden Gem Score with MONTHLY KSEI + DAILY technical"""
         try:
-            # Get data for this stock
             stock_data = self.df[self.df['Stock Code'] == stock_code].sort_values('Date')
             if stock_data.empty:
-                return 0
+                return {'total_score': 0, 'signal': 'NO DATA', 'signal_color': 'neutral'}
             
-            # Get recent data
             cutoff_date = self.latest_date - timedelta(days=lookback_days)
             recent_data = stock_data[stock_data['Date'] >= cutoff_date]
             
-            if recent_data.empty or len(recent_data) < 10:
-                return 0
+            if recent_data.empty or len(recent_data) < 20:
+                return {'total_score': 0, 'signal': 'INSUFFICIENT DATA', 'signal_color': 'neutral'}
             
             latest = recent_data.iloc[-1]
+            monthly_data = self.get_monthly_ksei_data(recent_data)
             
             scores = {}
             
-            # 1. SMART MONEY ACCUMULATION (40%)
+            # 1. SMART MONEY ACCUMULATION (45%) - MONTHLY KSEI DATA
             sm_score = 0
-            if 'Smart_Money_Flow' in recent_data.columns:
-                # Total smart money inflow
-                sm_total = recent_data['Smart_Money_Flow'].sum()
+            if not monthly_data.empty and 'Smart_Money_Flow' in monthly_data.columns:
+                sm_total = monthly_data['Smart_Money_Flow'].sum()
+                positive_months = (monthly_data['Smart_Money_Flow'] > 0).sum()
+                total_months = len(monthly_data)
                 
-                # Recent accumulation trend (last 10 days vs previous 10 days)
-                if len(recent_data) >= 20:
-                    sm_recent = recent_data['Smart_Money_Flow'].tail(10).sum()
-                    sm_previous = recent_data['Smart_Money_Flow'].iloc[-20:-10].sum()
-                    sm_trend = (sm_recent - sm_previous) / max(abs(sm_previous), 1e9) * 100
+                # Amount score (0-40 points)
+                amount_score = min(40, (abs(sm_total) / 5e9) * 20) if abs(sm_total) > 0 else 0
+                
+                # Consistency score (0-30 points)
+                consistency_score = (positive_months / max(total_months, 1)) * 30
+                
+                # Trend score (0-15 points)
+                if len(monthly_data) >= 2:
+                    sm_values = monthly_data['Smart_Money_Flow'].values
+                    if len(sm_values) >= 3:
+                        trend = np.polyfit(range(len(sm_values)), sm_values, 1)[0]
+                        trend_score = min(15, max(0, trend / 1e9 * 5))
+                    else:
+                        trend_score = 10 if sm_values[-1] > sm_values[0] else 0
                 else:
-                    sm_trend = 0
+                    trend_score = 0
                 
-                # Score based on amount and trend
-                amount_score = min(100, abs(sm_total) / 5e9 * 20)  # 5B = 20 points
-                trend_score = min(30, max(0, sm_trend))  # Up to 30 points for positive trend
+                # Retail divergence bonus (0-15 points)
+                if 'Retail_Flow' in monthly_data.columns:
+                    retail_total = monthly_data['Retail_Flow'].sum()
+                    if sm_total > 0 and retail_total < 0:
+                        divergence_score = 15
+                    elif sm_total > retail_total * 2:
+                        divergence_score = 10
+                    else:
+                        divergence_score = 0
+                else:
+                    divergence_score = 0
                 
-                # Bonus for consistency (more than 70% days positive)
-                positive_days = (recent_data['Smart_Money_Flow'] > 0).sum()
-                consistency_score = (positive_days / len(recent_data)) * 20  # Up to 20 points
-                
-                sm_score = amount_score + trend_score + consistency_score
+                sm_score = amount_score + consistency_score + trend_score + divergence_score
             
             scores['smart_money'] = min(100, sm_score)
             
-            # 2. TECHNICAL DIVERGENCE (30%)
-            tech_score = 50  # Base
+            # 2. TECHNICAL ANALYSIS (35%) - DAILY DATA
+            tech_score = 50
             
-            # Price vs Smart Money divergence
-            if 'Close' in recent_data.columns and 'Smart_Money_Flow' in recent_data.columns:
+            if 'Close' in recent_data.columns:
                 price_change = (latest['Close'] - recent_data.iloc[0]['Close']) / recent_data.iloc[0]['Close'] * 100
-                sm_change = recent_data['Smart_Money_Flow'].sum() / 1e9  # in billions
                 
-                # Bullish divergence: Price down/sideways but Smart Money accumulating
-                if price_change < 5 and sm_change > 1:
-                    tech_score += 30
-                # Strong bullish: Both price up and smart money in
-                elif price_change > 0 and sm_change > 2:
-                    tech_score += 25
-                # Neutral
-                elif -10 < price_change < 10:
-                    tech_score += 10
-            
-            # RSI condition
-            if 'RSI_14' in latest:
-                if latest['RSI_14'] < 40:  # Oversold
-                    tech_score += 15
-                elif latest['RSI_14'] < 30:  # Very oversold
-                    tech_score += 25
-            
-            # Volume confirmation
-            if 'Volume' in recent_data.columns and 'Unusual Volume' in recent_data.columns:
-                avg_volume = recent_data['Volume'].mean()
-                if latest['Volume'] > avg_volume * 1.5:
-                    tech_score += 10
-                if latest.get('Unusual Volume', False):
-                    tech_score += 5
+                # Price position score (-20 to +30)
+                if -15 <= price_change <= 25:
+                    price_score = 30
+                elif price_change < -15:
+                    price_score = max(10, 40 + price_change)
+                else:
+                    price_score = max(0, 40 - price_change)
+                
+                # Volume trend (0-20)
+                if 'Volume' in recent_data.columns:
+                    avg_volume = recent_data['Volume'].mean()
+                    recent_avg = recent_data['Volume'].tail(10).mean()
+                    volume_ratio = recent_avg / avg_volume if avg_volume > 0 else 1
+                    volume_score = min(20, (volume_ratio - 1) * 20)
+                else:
+                    volume_score = 10
+                
+                # RSI score (0-15)
+                if 'RSI_14' in latest:
+                    rsi = latest['RSI_14']
+                    if 30 <= rsi <= 40:
+                        rsi_score = 15
+                    elif rsi < 30:
+                        rsi_score = 20
+                    elif 40 < rsi < 70:
+                        rsi_score = 10
+                    else:
+                        rsi_score = 5
+                else:
+                    rsi_score = 8
+                
+                # Moving average alignment (0-10)
+                if 'Price_MA20' in latest and 'Price_MA50' in latest:
+                    if latest['Close'] > latest['Price_MA20'] > latest['Price_MA50']:
+                        ma_score = 10
+                    elif latest['Close'] > latest['Price_MA20']:
+                        ma_score = 7
+                    else:
+                        ma_score = 3
+                else:
+                    ma_score = 5
+                
+                tech_score = price_score + volume_score + rsi_score + ma_score
             
             scores['technical'] = min(100, max(0, tech_score))
             
-            # 3. FUNDAMENTAL & STRUCTURAL (30%)
+            # 3. FUNDAMENTAL & STRUCTURAL (20%)
             funda_score = 50
             
-            # Free Float analysis (20-40% is optimal for potential squeeze)
+            # Free Float analysis (0-25)
             if 'Free Float' in latest:
                 ff = latest['Free Float']
                 if 20 <= ff <= 40:
-                    funda_score += 30  # Perfect range
+                    ff_score = 25
                 elif ff < 20:
-                    funda_score += 20  # Very concentrated (potential squeeze)
+                    ff_score = 20
                 elif ff < 10:
-                    funda_score += 10  # Too concentrated
+                    ff_score = 15
                 elif ff > 60:
-                    funda_score -= 10  # Too diluted
+                    ff_score = 5
+                else:
+                    ff_score = 15
+            else:
+                ff_score = 10
             
-            # Ownership concentration trend
-            if 'Ownership_Concentration' in recent_data.columns:
-                if len(recent_data) > 10:
-                    conc_start = recent_data.iloc[0]['Ownership_Concentration']
-                    conc_end = latest['Ownership_Concentration']
-                    if conc_end > conc_start + 5:  # Increasing concentration
-                        funda_score += 15
-            
-            # Sector momentum (placeholder - would need sector data)
-            funda_score += 10  # Base sector score
-            
-            scores['fundamental'] = min(100, max(0, funda_score))
-            
-            # 4. SENTIMENT & RISK (Adjustment factor, not additive)
-            risk_adjustment = 1.0  # Default
-            
-            # High retail selling is good (contrarian)
-            if 'Retail_Flow' in recent_data.columns:
-                retail_total = recent_data['Retail_Flow'].sum()
-                if retail_total < -1e9:  # Retail selling > 1B
-                    risk_adjustment *= 1.1  # 10% bonus
-                elif retail_total > 1e9:  # Retail buying > 1B
-                    risk_adjustment *= 0.9  # 10% penalty
-            
-            # Market cap consideration (proxy via price and volume)
+            # Liquidity score (0-15)
             if 'Value' in recent_data.columns:
                 avg_daily_value = recent_data['Value'].mean()
-                if avg_daily_value < 10e9:  # < 10B daily value (small-mid cap)
-                    risk_adjustment *= 1.15  # 15% bonus for small caps
-                elif avg_daily_value > 100e9:  # > 100B (large cap)
-                    risk_adjustment *= 0.9  # 10% penalty for large caps
+                if avg_daily_value > 50e9:
+                    liquidity_score = 15
+                elif avg_daily_value > 20e9:
+                    liquidity_score = 12
+                elif avg_daily_value > 5e9:
+                    liquidity_score = 10
+                else:
+                    liquidity_score = 5
+            else:
+                liquidity_score = 8
             
-            # Calculate weighted total with risk adjustment
-            weights = {'smart_money': 0.40, 'technical': 0.30, 'fundamental': 0.30}
+            # Sector momentum placeholder (0-10)
+            sector_score = 8
+            
+            funda_score = ff_score + liquidity_score + sector_score
+            scores['fundamental'] = min(100, max(0, funda_score))
+            
+            # Calculate weighted total
+            weights = {'smart_money': 0.45, 'technical': 0.35, 'fundamental': 0.20}
             total_score = (
                 scores['smart_money'] * weights['smart_money'] +
                 scores['technical'] * weights['technical'] +
                 scores['fundamental'] * weights['fundamental']
-            ) * risk_adjustment
+            )
             
-            # Ensure score between 0-100
-            final_score = min(100, max(0, total_score))
+            # Risk adjustment
+            risk_adjust = 1.0
+            if 'Institutional_Net' in latest:
+                if latest['Institutional_Net'] > 10e9:
+                    risk_adjust *= 1.1
+                elif latest['Institutional_Net'] < -5e9:
+                    risk_adjust *= 0.9
+            
+            final_score = min(100, max(0, total_score * risk_adjust))
             
             # Determine signal
             if final_score >= 80:
@@ -681,21 +702,21 @@ class HiddenGemAnalyzer:
                 'component_scores': scores,
                 'signal': signal,
                 'signal_color': signal_color,
-                'latest_price': latest.get('Close', 0),
-                'price_change_60d': ((latest.get('Close', 0) - recent_data.iloc[0].get('Close', 0)) / 
-                                    recent_data.iloc[0].get('Close', 0) * 100) if recent_data.iloc[0].get('Close', 0) > 0 else 0,
+                'latest_price': latest.get('Close', latest.get('Price', 0)),
+                'price_change_period': price_change if 'price_change' in locals() else 0,
                 'sector': latest.get('Sector', 'N/A'),
                 'free_float': latest.get('Free Float', 0),
-                'smart_money_60d': recent_data['Smart_Money_Flow'].sum() if 'Smart_Money_Flow' in recent_data.columns else 0,
-                'retail_60d': recent_data['Retail_Flow'].sum() if 'Retail_Flow' in recent_data.columns else 0,
-                'institutional_net': latest.get('Institutional_Net', 0),
-                'volume_avg_60d': recent_data['Volume'].mean() if 'Volume' in recent_data.columns else 0,
+                'smart_money_total': sm_total if 'sm_total' in locals() else 0,
+                'positive_months': positive_months if 'positive_months' in locals() else 0,
+                'total_months': total_months if 'total_months' in locals() else 0,
+                'monthly_data_points': len(monthly_data) if 'monthly_data' in locals() else 0,
+                'volume_ratio': volume_ratio if 'volume_ratio' in locals() else 1,
                 'rsi': latest.get('RSI_14', 50)
             }
             
         except Exception as e:
             st.error(f"Error calculating score for {stock_code}: {e}")
-            return {'total_score': 0, 'component_scores': {}, 'signal': 'ERROR', 'signal_color': 'neutral'}
+            return {'total_score': 0, 'signal': 'ERROR', 'signal_color': 'neutral'}
     
     def find_top_gems(self, top_n=25, min_score=65, sector_filter=None):
         """Find top hidden gem candidates"""
@@ -704,14 +725,13 @@ class HiddenGemAnalyzer:
         
         progress_bar = st.progress(0)
         status_text = st.empty()
-        total_stocks = min(200, len(unique_stocks))  # Limit for performance
+        total_stocks = min(150, len(unique_stocks))
         
         for i, stock in enumerate(unique_stocks[:total_stocks]):
-            status_text.text(f"🔍 Analyzing {stock}... ({i+1}/{total_stocks})")
+            status_text.text(f"🔍 {stock}... ({i+1}/{total_stocks})")
             
             score_data = self.calculate_gem_score(stock)
             if score_data['total_score'] >= min_score:
-                # Apply sector filter if specified
                 if sector_filter and score_data['sector'] != sector_filter:
                     continue
                     
@@ -721,13 +741,14 @@ class HiddenGemAnalyzer:
                     'Signal': score_data['signal'],
                     'Sector': score_data['sector'],
                     'Price': score_data['latest_price'],
-                    'Price Chg 60D': score_data['price_change_60d'],
+                    'Price Chg': score_data['price_change_period'],
                     'Free Float %': score_data['free_float'],
-                    'Smart Money 60D (B)': score_data['smart_money_60d'] / 1e9,
-                    'Retail 60D (B)': score_data['retail_60d'] / 1e9,
-                    'Institutional Net (B)': score_data['institutional_net'] / 1e9,
-                    'Avg Volume 60D': score_data['volume_avg_60d'],
+                    'Smart Money (B)': score_data['smart_money_total'] / 1e9,
+                    'Positive Months': score_data['positive_months'],
+                    'Total Months': score_data['total_months'],
+                    'Monthly Data': score_data['monthly_data_points'],
                     'RSI': score_data['rsi'],
+                    'Volume Trend': score_data.get('volume_ratio', 1),
                     'Smart Score': score_data['component_scores'].get('smart_money', 0),
                     'Tech Score': score_data['component_scores'].get('technical', 0),
                     'Fundamental Score': score_data['component_scores'].get('fundamental', 0)
@@ -758,20 +779,16 @@ def create_gem_radar_chart(scores, stock_code, signal):
     ]
     
     fig = go.Figure(data=go.Scatterpolar(
-        r=values + [values[0]],  # Close the loop
+        r=values + [values[0]],
         theta=categories + [categories[0]],
         fill='toself',
-        fillcolor='rgba(255, 215, 0, 0.3)',  # Gold color for gems
+        fillcolor='rgba(255, 215, 0, 0.3)',
         line=dict(color='#FFD700', width=3)
     ))
     
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100],
-                tickfont=dict(color='#A3AED0')
-            ),
+            radialaxis=dict(visible=True, range=[0, 100]),
             bgcolor='rgba(0,0,0,0)'
         ),
         showlegend=False,
@@ -792,61 +809,86 @@ def create_ownership_timeline(df, stock_code):
         return None
     
     fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=(f'{stock_code} - Price & Smart Money Flow', 'Institutional vs Retail Flow'),
-        vertical_spacing=0.15,
-        row_heights=[0.6, 0.4]
+        rows=3, cols=1,
+        subplot_titles=(
+            f'{stock_code} - Price', 
+            'Smart Money Flow (B) - MONTHLY', 
+            'Institutional vs Retail Flow (B)'
+        ),
+        vertical_spacing=0.1,
+        row_heights=[0.4, 0.3, 0.3]
     )
     
-    # Price line
+    # Price chart
     fig.add_trace(
-        go.Scatter(x=stock_data['Date'], y=stock_data['Close'], 
-                  name='Price', line=dict(color='#4318FF', width=2)),
+        go.Scatter(
+            x=stock_data['Date'], 
+            y=stock_data['Close'], 
+            name='Price', 
+            line=dict(color='#4318FF', width=2),
+            mode='lines'
+        ),
         row=1, col=1
     )
     
-    # Smart Money bars
+    # Smart Money bars (monthly)
     if 'Smart_Money_Flow' in stock_data.columns:
-        colors = ['#05CD99' if x > 0 else '#EE5D50' for x in stock_data['Smart_Money_Flow']]
-        fig.add_trace(
-            go.Bar(x=stock_data['Date'], y=stock_data['Smart_Money_Flow'] / 1e9,
-                  name='Smart Money (B)', marker_color=colors, opacity=0.7),
-            row=1, col=1, secondary_y=True
-        )
+        # Highlight month-end data points
+        month_ends = stock_data[stock_data['Date'].dt.is_month_end]
+        if not month_ends.empty:
+            colors = ['#05CD99' if x > 0 else '#EE5D50' for x in month_ends['Smart_Money_Flow']]
+            fig.add_trace(
+                go.Bar(
+                    x=month_ends['Date'], 
+                    y=month_ends['Smart_Money_Flow'] / 1e9,
+                    name='Smart Money (B)', 
+                    marker_color=colors,
+                    opacity=0.7
+                ),
+                row=2, col=1
+            )
     
-    # Institutional vs Retail flow
+    # Institutional vs Retail
     if 'Institutional_Net' in stock_data.columns:
-        fig.add_trace(
-            go.Bar(x=stock_data['Date'], y=stock_data['Institutional_Net'] / 1e9,
-                  name='Institutional Net (B)', marker_color='#4318FF'),
-            row=2, col=1
-        )
+        month_ends_institutional = stock_data[stock_data['Date'].dt.is_month_end]
+        if not month_ends_institutional.empty:
+            fig.add_trace(
+                go.Bar(
+                    x=month_ends_institutional['Date'], 
+                    y=month_ends_institutional['Institutional_Net'] / 1e9,
+                    name='Institutional Net (B)', 
+                    marker_color='#4318FF',
+                    opacity=0.7
+                ),
+                row=3, col=1
+            )
     
     if 'Retail_Flow' in stock_data.columns:
-        fig.add_trace(
-            go.Scatter(x=stock_data['Date'], y=stock_data['Retail_Flow'] / 1e9,
-                      name='Retail Flow (B)', line=dict(color='#EE5D50', width=2)),
-            row=2, col=1
-        )
+        month_ends_retail = stock_data[stock_data['Date'].dt.is_month_end]
+        if not month_ends_retail.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=month_ends_retail['Date'], 
+                    y=month_ends_retail['Retail_Flow'] / 1e9,
+                    name='Retail Flow (B)', 
+                    line=dict(color='#EE5D50', width=2),
+                    mode='lines+markers'
+                ),
+                row=3, col=1
+            )
     
     fig.update_layout(
-        height=600,
+        height=700,
         showlegend=True,
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(color='#2B3674'),
         hovermode='x unified',
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
-    fig.update_xaxes(showgrid=True, gridcolor='#E0E5F2', tickfont=dict(color='#A3AED0'))
-    fig.update_yaxes(showgrid=True, gridcolor='#E0E5F2', tickfont=dict(color='#A3AED0'))
+    fig.update_xaxes(showgrid=True, gridcolor='#E0E5F2')
+    fig.update_yaxes(showgrid=True, gridcolor='#E0E5F2')
     
     return fig
 
@@ -858,7 +900,7 @@ def create_sector_heatmap(gems_df):
     sector_stats = gems_df.groupby('Sector').agg({
         'Stock': 'count',
         'Gem Score': 'mean',
-        'Smart Money 60D (B)': 'sum'
+        'Smart Money (B)': 'sum'
     }).reset_index()
     
     sector_stats.columns = ['Sector', 'Count', 'Avg Score', 'Total Smart Money (B)']
@@ -869,7 +911,7 @@ def create_sector_heatmap(gems_df):
         values='Total Smart Money (B)',
         color='Avg Score',
         color_continuous_scale='RdYlGn',
-        title='💎 Hidden Gems by Sector (Size = Smart Money, Color = Avg Score)',
+        title='💎 Hidden Gems by Sector',
         hover_data=['Count', 'Avg Score']
     )
     
@@ -882,14 +924,14 @@ def create_sector_heatmap(gems_df):
     return fig
 
 # ==============================================================================
-# 🎨 MAIN DASHBOARD - 8 TABS VERSION
+# 🎨 MAIN DASHBOARD - ALL FEATURES
 # ==============================================================================
 def main():
     # HEADER
     st.markdown("""
     <div class="header-banner">
-        <div class="header-title">🚀 HIDDEN GEM FINDER - KSEI & DAILY TX1Y MERGE</div>
-        <div class="header-subtitle">Discover Undervalued Stocks with Institutional Accumulation • Multi-dimensional Analysis</div>
+        <div class="header-title">🚀 HIDDEN GEM FINDER v2.0</div>
+        <div class="header-subtitle">Monthly KSEI Ownership + Daily Technical Analysis • Multi-dimensional Scoring</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -901,14 +943,14 @@ def main():
         return
     
     # Load data
-    with st.spinner("🚀 Loading and analyzing merged dataset..."):
+    with st.spinner("🚀 Loading Monthly KSEI + Daily Historical Data..."):
         df_merged = loader.load_merged_data()
     
     if df_merged.empty:
         st.error("Failed to load data. Please check data files.")
         return
     
-    # Store in session for analyzer
+    # Store in session
     analyzer = HiddenGemAnalyzer(df_merged)
     st.session_state.analyzer = analyzer
     st.session_state.df_merged = df_merged
@@ -916,50 +958,59 @@ def main():
     # SIDEBAR
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=60)
-        st.markdown("<h3 style='color:#2B3674;'>💎 Gem Finder</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='color:#2B3674;'>💎 Gem Finder v2.0</h3>", unsafe_allow_html=True)
         st.divider()
         
         # Quick stats
-        st.markdown("##### 📊 Quick Stats")
+        st.markdown("##### 📊 Data Overview")
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             st.metric("Stocks", df_merged['Stock Code'].nunique())
         with col_s2:
-            st.metric("Latest Date", df_merged['Date'].max().strftime('%d/%m'))
+            st.metric("Latest", df_merged['Date'].max().strftime('%d/%m'))
         
         st.divider()
         
         # Gem finder settings
-        st.markdown("##### ⚙️ Gem Finder Settings")
-        lookback_days = st.slider("Analysis Period (Days)", 30, 180, 60, 10)
-        min_gem_score = st.slider("Minimum Gem Score", 50, 90, 65, 5)
-        top_n_gems = st.slider("Top N Gems", 10, 50, 25, 5)
+        st.markdown("##### ⚙️ Analysis Settings")
+        lookback_days = st.slider("Analysis Period", 30, 180, 90, 15)
+        min_gem_score = st.slider("Minimum Score", 50, 90, 65, 5)
+        top_n_gems = st.slider("Top N Results", 10, 50, 25, 5)
         
         # Sector filter
         sectors = ['All'] + sorted(df_merged['Sector'].unique().tolist())
-        selected_sector = st.selectbox("Filter by Sector", sectors)
+        selected_sector = st.selectbox("Sector Filter", sectors)
+        
+        # Advanced filters
+        with st.expander("🔍 Advanced Filters"):
+            min_smart_money = st.number_input("Min Smart Money (B)", 0.0, 100.0, 1.0, 0.5)
+            max_free_float = st.number_input("Max Free Float %", 0.0, 100.0, 60.0, 5.0)
+            min_rsi = st.slider("Min RSI", 0, 100, 30, 5)
+            max_rsi = st.slider("Max RSI", 0, 100, 70, 5)
         
         st.divider()
         
         # Actions
-        if st.button("🔄 Refresh All Data", use_container_width=True):
+        if st.button("🔄 Refresh All Data", use_container_width=True, type="primary"):
             st.cache_data.clear()
             st.rerun()
+        
+        if st.button("📊 Run Full Analysis", use_container_width=True):
+            st.session_state.run_analysis = True
         
         st.divider()
         
         # Data info
-        with st.expander("📁 Data Information"):
-            st.write(f"**Merged Dataset:** {df_merged.shape[0]:,} rows × {df_merged.shape[1]:,} columns")
+        with st.expander("📁 Dataset Info"):
+            st.write(f"**Total Rows:** {df_merged.shape[0]:,}")
             st.write(f"**Date Range:** {df_merged['Date'].min().date()} to {df_merged['Date'].max().date()}")
-            st.write(f"**Stocks:** {df_merged['Stock Code'].nunique():,}")
-            st.write(f"**Latest Data:** {df_merged['Date'].max().strftime('%d %b %Y')}")
+            st.write(f"**KSEI Coverage:** {(df_merged['Smart_Money_Flow'].notna().sum() / len(df_merged) * 100):.1f}%")
+            st.write(f"**Data Types:** Monthly KSEI + Daily Trading")
     
-    # MAIN CONTENT - 8 TABS
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    # MAIN CONTENT - TABS
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🏆 Top Gems", "📈 Stock Analyzer", "📊 Market Overview", 
-        "🔄 Sector Rotation", "🧠 Smart Money Flow", "📉 Technical Scan",
-        "🔍 Deep Dive", "📁 Data Explorer"
+        "🔄 Sector Rotation", "📉 Technical Scan", "📁 Data Explorer"
     ])
     
     # TAB 1: TOP GEMS
@@ -969,15 +1020,15 @@ def main():
         
         col_t1, col_t2 = st.columns([3, 1])
         with col_t1:
-            st.markdown(f"**Period:** Last {lookback_days} days | **Min Score:** {min_gem_score} | **Sector:** {selected_sector}")
+            st.markdown(f"**Period:** {lookback_days} days | **Min Score:** {min_gem_score} | **Sector:** {selected_sector}")
         with col_t2:
-            if st.button("🔍 Find Gems", type="primary", use_container_width=True):
-                st.session_state.find_gems_clicked = True
+            if st.button("🔍 Find Gems Now", type="primary", use_container_width=True):
+                st.session_state.find_gems = True
         
-        if 'find_gems_clicked' in st.session_state and st.session_state.find_gems_clicked:
+        if 'find_gems' in st.session_state and st.session_state.find_gems:
             sector_filter = None if selected_sector == 'All' else selected_sector
             
-            with st.spinner(f"Finding hidden gems (min score: {min_gem_score})..."):
+            with st.spinner(f"Analyzing stocks with advanced scoring..."):
                 gems_df = analyzer.find_top_gems(
                     top_n=top_n_gems, 
                     min_score=min_gem_score,
@@ -985,112 +1036,115 @@ def main():
                 )
             
             if not gems_df.empty:
-                # Display summary
-                col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
-                with col_sm1:
-                    st.metric("Total Gems", len(gems_df))
-                with col_sm2:
-                    st.metric("Avg Score", f"{gems_df['Gem Score'].mean():.1f}")
-                with col_sm3:
-                    st.metric("Avg Smart Money", f"{gems_df['Smart Money 60D (B)'].sum():.1f}B")
-                with col_sm4:
-                    st.metric("Top Sector", gems_df['Sector'].mode().iloc[0] if not gems_df.empty else "N/A")
+                # Apply advanced filters
+                filtered_df = gems_df.copy()
+                filtered_df = filtered_df[filtered_df['Smart Money (B)'] >= min_smart_money]
+                filtered_df = filtered_df[filtered_df['Free Float %'] <= max_free_float]
+                filtered_df = filtered_df[(filtered_df['RSI'] >= min_rsi) & (filtered_df['RSI'] <= max_rsi)]
                 
-                # Sector heatmap
-                st.markdown("#### 🗺️ Sector Distribution")
-                heatmap = create_sector_heatmap(gems_df)
-                if heatmap:
-                    st.plotly_chart(heatmap, use_container_width=True)
-                
-                # Gems table
-                st.markdown("#### 🏆 Gem Candidates")
-                
-                # Format the dataframe for display
-                display_cols = ['Stock', 'Gem Score', 'Signal', 'Sector', 'Price', 
-                              'Price Chg 60D', 'Free Float %', 'Smart Money 60D (B)', 
-                              'RSI']
-                
-                display_df = gems_df[display_cols].copy()
-                
-                # Apply styling
-                def color_signal(val):
-                    if 'BUY' in val or 'ACCUMULATE' in val:
-                        return 'color: #065F46; font-weight: bold;'
-                    elif 'WATCH' in val:
-                        return 'color: #D97706; font-weight: bold;'
-                    else:
-                        return 'color: #6B7280;'
-                
-                st.dataframe(
-                    display_df.style
-                    .format({
-                        'Price': '{:,.0f}',
-                        'Price Chg 60D': '{:.1f}%',
-                        'Free Float %': '{:.1f}%',
-                        'Smart Money 60D (B)': '{:.2f}',
-                        'RSI': '{:.1f}',
-                        'Gem Score': '{:.1f}'
-                    })
-                    .applymap(color_signal, subset=['Signal'])
-                    .background_gradient(
-                        subset=['Gem Score'], 
-                        cmap='RdYlGn', 
-                        vmin=65, 
-                        vmax=100
+                if not filtered_df.empty:
+                    # Summary metrics
+                    col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
+                    with col_sm1:
+                        st.metric("Total Gems", len(filtered_df))
+                    with col_sm2:
+                        st.metric("Avg Score", f"{filtered_df['Gem Score'].mean():.1f}")
+                    with col_sm3:
+                        st.metric("Total Smart Money", f"{filtered_df['Smart Money (B)'].sum():.1f}B")
+                    with col_sm4:
+                        top_sector = filtered_df['Sector'].mode().iloc[0] if not filtered_df.empty else "N/A"
+                        st.metric("Top Sector", top_sector)
+                    
+                    # Sector heatmap
+                    st.markdown("#### 🗺️ Sector Distribution")
+                    heatmap = create_sector_heatmap(filtered_df)
+                    if heatmap:
+                        st.plotly_chart(heatmap, use_container_width=True)
+                    
+                    # Gems table
+                    st.markdown("#### 🏆 Filtered Gem Candidates")
+                    
+                    display_cols = ['Stock', 'Gem Score', 'Signal', 'Sector', 'Price', 
+                                  'Price Chg', 'Free Float %', 'Smart Money (B)', 
+                                  'Positive Months', 'Monthly Data', 'RSI', 'Volume Trend']
+                    
+                    display_df = filtered_df[display_cols].copy()
+                    
+                    def color_signal(val):
+                        if 'BUY' in val:
+                            return 'color: #065F46; font-weight: bold;'
+                        elif 'ACCUMULATE' in val:
+                            return 'color: #D97706; font-weight: bold;'
+                        elif 'WATCH' in val:
+                            return 'color: #2563EB; font-weight: bold;'
+                        else:
+                            return 'color: #6B7280;'
+                    
+                    st.dataframe(
+                        display_df.style
+                        .format({
+                            'Price': '{:,.0f}',
+                            'Price Chg': '{:.1f}%',
+                            'Free Float %': '{:.1f}%',
+                            'Smart Money (B)': '{:.2f}',
+                            'RSI': '{:.1f}',
+                            'Gem Score': '{:.1f}',
+                            'Volume Trend': '{:.2f}x'
+                        })
+                        .applymap(color_signal, subset=['Signal'])
+                        .background_gradient(subset=['Gem Score'], cmap='RdYlGn', vmin=65, vmax=100)
+                        .bar(subset=['Smart Money (B)'], color='#05CD99')
+                        .bar(subset=['Positive Months'], color='#4318FF'),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=600
                     )
-                    .bar(subset=['Smart Money 60D (B)'], color='#05CD99')
-                    .bar(subset=['Price Chg 60D'], color='#4318FF', align='zero'),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600
-                )
-                
-                # Top gem analysis
-                if len(gems_df) > 0:
-                    st.markdown("#### 🎯 Top Gem Analysis")
-                    top_gem = gems_df.iloc[0]['Stock']
-                    score_data = analyzer.calculate_gem_score(top_gem, lookback_days)
                     
-                    col_ana1, col_ana2 = st.columns(2)
-                    
-                    with col_ana1:
-                        st.plotly_chart(
-                            create_gem_radar_chart(score_data['component_scores'], top_gem, score_data['signal']),
-                            use_container_width=True
-                        )
-                    
-                    with col_ana2:
-                        st.plotly_chart(
-                            create_ownership_timeline(df_merged, top_gem),
-                            use_container_width=True
-                        )
-                    
-                    # Detailed metrics
-                    with st.expander(f"📊 Detailed Analysis: {top_gem}"):
-                        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-                        with col_d1:
-                            st.metric("Gem Score", f"{score_data['total_score']:.1f}/100")
-                        with col_d2:
-                            st.metric("Signal", score_data['signal'])
-                        with col_d3:
-                            st.metric("Smart Money 60D", f"Rp {score_data['smart_money_60d']/1e9:.1f}B")
-                        with col_d4:
-                            st.metric("Retail Flow 60D", f"Rp {score_data['retail_60d']/1e9:.1f}B")
+                    # Top gem deep dive
+                    if len(filtered_df) > 0:
+                        st.markdown("#### 🎯 Top Gem Deep Dive")
+                        top_gem = filtered_df.iloc[0]['Stock']
+                        score_data = analyzer.calculate_gem_score(top_gem, lookback_days)
                         
-                        st.write("**Component Scores:**")
-                        comp_df = pd.DataFrame.from_dict(
-                            score_data['component_scores'], 
-                            orient='index', 
-                            columns=['Score']
-                        )
-                        comp_df['Weight'] = [0.40, 0.30, 0.30]
-                        comp_df['Weighted'] = comp_df['Score'] * comp_df['Weight']
-                        st.dataframe(
-                            comp_df.style.format({'Score': '{:.1f}', 'Weight': '{:.2f}', 'Weighted': '{:.2f}'}),
-                            use_container_width=True
-                        )
+                        col_ana1, col_ana2 = st.columns(2)
+                        
+                        with col_ana1:
+                            st.plotly_chart(
+                                create_gem_radar_chart(score_data['component_scores'], top_gem, score_data['signal']),
+                                use_container_width=True
+                            )
+                        
+                        with col_ana2:
+                            st.plotly_chart(
+                                create_ownership_timeline(df_merged, top_gem),
+                                use_container_width=True
+                            )
+                        
+                        # Detailed analysis
+                        with st.expander(f"📊 Detailed Analysis: {top_gem}"):
+                            col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                            with col_d1:
+                                st.metric("Gem Score", f"{score_data['total_score']:.1f}/100")
+                            with col_d2:
+                                st.metric("Signal", score_data['signal'])
+                            with col_d3:
+                                months_pos = f"{score_data['positive_months']}/{score_data['total_months']}"
+                                st.metric("Positive Months", months_pos)
+                            with col_d4:
+                                st.metric("Smart Money Total", f"Rp {score_data['smart_money_total']/1e9:.1f}B")
+                            
+                            st.markdown("**Data Quality:**")
+                            col_q1, col_q2, col_q3 = st.columns(3)
+                            with col_q1:
+                                st.metric("Monthly Points", score_data['monthly_data_points'])
+                            with col_q2:
+                                st.metric("Free Float", f"{score_data['free_float']:.1f}%")
+                            with col_q3:
+                                st.metric("RSI", f"{score_data['rsi']:.1f}")
+                else:
+                    st.warning("No gems found with current filters. Try relaxing criteria.")
             else:
-                st.info("No hidden gems found with the current criteria. Try lowering the minimum score or changing the sector filter.")
+                st.info("No hidden gems found. Try lowering minimum score.")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1099,7 +1153,6 @@ def main():
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">🔍 Individual Stock Analysis</div>', unsafe_allow_html=True)
         
-        # Stock selector
         available_stocks = sorted(df_merged['Stock Code'].unique())
         selected_stock = st.selectbox(
             "Select Stock", 
@@ -1108,20 +1161,19 @@ def main():
         )
         
         if selected_stock:
-            # Calculate score
             score_data = analyzer.calculate_gem_score(selected_stock, lookback_days)
             
-            # Display header metrics
+            # Header metrics
             col_h1, col_h2, col_h3, col_h4 = st.columns(4)
             with col_h1:
                 st.metric("Gem Score", f"{score_data['total_score']:.1f}/100", 
                          delta=score_data['signal'], delta_color="off")
             with col_h2:
                 st.metric("Price", f"Rp {score_data['latest_price']:,.0f}",
-                         delta=f"{score_data['price_change_60d']:.1f}% 60D")
+                         delta=f"{score_data['price_change_period']:.1f}%")
             with col_h3:
-                st.metric("Smart Money 60D", f"Rp {score_data['smart_money_60d']/1e9:.1f}B",
-                         delta=f"Rp {score_data['retail_60d']/1e9:.1f}B Retail")
+                st.metric("Smart Money", f"Rp {score_data['smart_money_total']/1e9:.1f}B",
+                         delta=f"{score_data['positive_months']}/{score_data['total_months']} months")
             with col_h4:
                 st.metric("Free Float", f"{score_data['free_float']:.1f}%",
                          delta=score_data['sector'])
@@ -1140,27 +1192,18 @@ def main():
                     use_container_width=True
                 )
             
-            # Detailed analysis
-            with st.expander("📈 Technical & Fundamental Details"):
-                col_det1, col_det2, col_det3 = st.columns(3)
-                
-                with col_det1:
-                    st.markdown("##### 🧠 Smart Money Analysis")
-                    st.write(f"**60D Total:** Rp {score_data['smart_money_60d']/1e9:.2f}B")
-                    st.write(f"**Institutional Net:** Rp {score_data['institutional_net']/1e9:.2f}B")
-                    st.write(f"**Retail Flow:** Rp {score_data['retail_60d']/1e9:.2f}B")
-                
-                with col_det2:
-                    st.markdown("##### 📊 Technical Indicators")
-                    st.write(f"**RSI (14):** {score_data['rsi']:.1f}")
-                    st.write(f"**60D Price Change:** {score_data['price_change_60d']:.1f}%")
-                    st.write(f"**Avg Daily Volume:** {score_data['volume_avg_60d']/1e6:.1f}M")
-                
-                with col_det3:
-                    st.markdown("##### 🏢 Fundamental")
-                    st.write(f"**Sector:** {score_data['sector']}")
-                    st.write(f"**Free Float:** {score_data['free_float']:.1f}%")
-                    st.write(f"**Ownership Concentration:** {100 - score_data['free_float']:.1f}%")
+            # Data quality info
+            st.markdown("##### 📅 Data Quality & Frequency")
+            col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+            with col_q1:
+                st.metric("Monthly Points", score_data['monthly_data_points'])
+            with col_q2:
+                pos_rate = (score_data['positive_months'] / max(score_data['total_months'], 1)) * 100
+                st.metric("Positive Rate", f"{pos_rate:.0f}%")
+            with col_q3:
+                st.metric("RSI", f"{score_data['rsi']:.1f}")
+            with col_q4:
+                st.metric("Volume Trend", f"{score_data.get('volume_ratio', 1):.2f}x")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1169,10 +1212,9 @@ def main():
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">📊 Market Overview</div>', unsafe_allow_html=True)
         
-        # Date selector
         latest_dates = sorted(df_merged['Date'].unique(), reverse=True)[:30]
         selected_date = st.selectbox(
-            "Select Date for Overview",
+            "Select Date",
             options=latest_dates,
             format_func=lambda x: x.strftime('%d %b %Y'),
             index=0
@@ -1198,8 +1240,8 @@ def main():
                     st.metric("Avg Change", f"{avg_change:.2f}%")
                 
                 with col_m4:
-                    unusual_count = daily_data['Unusual Volume'].sum() if 'Unusual Volume' in daily_data.columns else 0
-                    st.metric("Unusual Volume", unusual_count)
+                    unusual = daily_data['Unusual Volume'].sum() if 'Unusual Volume' in daily_data.columns else 0
+                    st.metric("Unusual Volume", unusual)
                 
                 # Top tables
                 col_tab1, col_tab2 = st.columns(2)
@@ -1212,16 +1254,13 @@ def main():
                             'Close': 'Rp {:,.0f}',
                             'Change %': '{:.2f}%',
                             'Value': 'Rp {:,.0f}'
-                        }).background_gradient(
-                            subset=['Change %'], 
-                            cmap='Greens'
-                        ),
+                        }).background_gradient(subset=['Change %'], cmap='Greens'),
                         use_container_width=True,
                         hide_index=True
                     )
                 
                 with col_tab2:
-                    st.markdown("##### 💰 Top Value Stocks")
+                    st.markdown("##### 💰 Top Value")
                     top_value = daily_data.nlargest(10, 'Value')[['Stock Code', 'Value', 'Volume', 'Change %']]
                     top_value['Value_B'] = top_value['Value'] / 1e9
                     st.dataframe(
@@ -1234,29 +1273,6 @@ def main():
                         use_container_width=True,
                         hide_index=True
                     )
-                
-                # Sector performance
-                st.markdown("##### 🏭 Sector Performance")
-                if 'Sector' in daily_data.columns and 'Change %' in daily_data.columns:
-                    sector_perf = daily_data.groupby('Sector').agg({
-                        'Change %': 'mean',
-                        'Value': 'sum',
-                        'Stock Code': 'count'
-                    }).round(2).reset_index()
-                    
-                    sector_perf.columns = ['Sector', 'Avg Change %', 'Total Value', 'Stock Count']
-                    sector_perf['Total Value_T'] = sector_perf['Total Value'] / 1e12
-                    
-                    fig_sector = px.bar(
-                        sector_perf.sort_values('Avg Change %', ascending=False),
-                        x='Sector',
-                        y='Avg Change %',
-                        color='Total Value_T',
-                        color_continuous_scale='RdYlGn',
-                        title=f"Sector Performance - {selected_date.strftime('%d %b %Y')}",
-                        hover_data=['Stock Count', 'Total Value_T']
-                    )
-                    st.plotly_chart(fig_sector, use_container_width=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1265,7 +1281,6 @@ def main():
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">🔄 Sector Rotation Analysis</div>', unsafe_allow_html=True)
         
-        # Date range selector
         col_dr1, col_dr2 = st.columns(2)
         with col_dr1:
             start_date = st.date_input(
@@ -1284,10 +1299,11 @@ def main():
                 (df_merged['Date'].dt.date <= end_date)
             ]
             
-            if not period_data.empty:
-                # Sector-wise smart money flow
-                if 'Smart_Money_Flow' in period_data.columns:
-                    sector_flow = period_data.groupby('Sector').agg({
+            if not period_data.empty and 'Smart_Money_Flow' in period_data.columns:
+                # Use month-end data for sector analysis
+                month_ends = period_data[period_data['Date'].dt.is_month_end]
+                if not month_ends.empty:
+                    sector_flow = month_ends.groupby('Sector').agg({
                         'Smart_Money_Flow': 'sum',
                         'Retail_Flow': 'sum',
                         'Stock Code': 'nunique'
@@ -1298,7 +1314,7 @@ def main():
                     sector_flow['Smart Money Flow_B'] = sector_flow['Smart Money Flow'] / 1e9
                     sector_flow['Net Institutional_B'] = sector_flow['Net Institutional'] / 1e9
                     
-                    # Display charts
+                    # Charts
                     col_sr1, col_sr2 = st.columns(2)
                     
                     with col_sr1:
@@ -1310,7 +1326,7 @@ def main():
                             y='Net Institutional_B',
                             color='Net Institutional_B',
                             color_continuous_scale='Greens',
-                            title="Top Sector Inflows (Net Institutional, B)",
+                            title="Top Sector Inflows (B)",
                             hover_data=['Stock Count']
                         )
                         st.plotly_chart(fig_inflows, use_container_width=True)
@@ -1324,12 +1340,12 @@ def main():
                             y='Net Institutional_B',
                             color='Net Institutional_B',
                             color_continuous_scale='Reds',
-                            title="Top Sector Outflows (Net Institutional, B)",
+                            title="Top Sector Outflows (B)",
                             hover_data=['Stock Count']
                         )
                         st.plotly_chart(fig_outflows, use_container_width=True)
                     
-                    # Sector heatmap
+                    # Sector matrix
                     st.markdown("##### 🔥 Sector Flow Matrix")
                     st.dataframe(
                         sector_flow[['Sector', 'Smart Money Flow_B', 'Retail Flow', 'Net Institutional_B', 'Stock Count']]
@@ -1338,74 +1354,138 @@ def main():
                             'Smart Money Flow_B': '{:.1f}B',
                             'Retail Flow': '{:.0f}',
                             'Net Institutional_B': '{:.1f}B'
-                        }).background_gradient(
-                            subset=['Net Institutional_B'], 
-                            cmap='RdYlGn'
-                        ),
+                        }).background_gradient(subset=['Net Institutional_B'], cmap='RdYlGn'),
                         use_container_width=True,
                         hide_index=True
                     )
         
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # TAB 5-8: PLACEHOLDERS (akan kita kembangkan nanti)
+    # TAB 5: TECHNICAL SCAN
     with tab5:
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🧠 Smart Money Flow Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">📉 Technical Scan & Screening</div>', unsafe_allow_html=True)
+        
         st.info("""
-        **Coming Soon Features:**
-        - Real-time smart money tracking
-        - Accumulation/distribution patterns
-        - Cross-market comparisons
-        - Historical flow analysis
+        **Technical Screening Features:**
+        - RSI Oversold/Overbought scan
+        - Volume spike detection  
+        - Price breakout identification
+        - Moving average crossovers
+        - Support/Resistance levels
         """)
+        
+        # Technical filters
+        col_tech1, col_tech2, col_tech3 = st.columns(3)
+        with col_tech1:
+            rsi_min = st.slider("Min RSI", 0, 100, 30, 5)
+            rsi_max = st.slider("Max RSI", 0, 100, 70, 5)
+        with col_tech2:
+            price_change_min = st.slider("Min Price Change %", -50, 50, -20, 5)
+            price_change_max = st.slider("Max Price Change %", -50, 50, 30, 5)
+        with col_tech3:
+            volume_spike = st.slider("Min Volume Spike (x)", 1.0, 5.0, 1.5, 0.1)
+            ma_crossover = st.checkbox("MA20 > MA50 Crossover")
+        
+        if st.button("🔍 Run Technical Scan", type="primary"):
+            latest_data = df_merged[df_merged['Date'] == df_merged['Date'].max()]
+            
+            if not latest_data.empty:
+                filtered = latest_data.copy()
+                
+                # Apply filters
+                if 'RSI_14' in filtered.columns:
+                    filtered = filtered[(filtered['RSI_14'] >= rsi_min) & (filtered['RSI_14'] <= rsi_max)]
+                
+                if 'Change %' in filtered.columns:
+                    filtered = filtered[(filtered['Change %'] >= price_change_min) & 
+                                       (filtered['Change %'] <= price_change_max)]
+                
+                if 'Volume' in filtered.columns and 'MA20_vol' in filtered.columns:
+                    filtered = filtered[filtered['Volume'] > filtered['MA20_vol'] * volume_spike]
+                
+                if ma_crossover and 'Price_MA20' in filtered.columns and 'Price_MA50' in filtered.columns:
+                    filtered = filtered[filtered['Price_MA20'] > filtered['Price_MA50']]
+                
+                st.success(f"Found {len(filtered)} stocks matching criteria")
+                st.dataframe(
+                    filtered[['Stock Code', 'Close', 'Change %', 'RSI_14', 'Volume', 'Value']]
+                    .sort_values('Change %', ascending=False)
+                    .head(20)
+                    .style.format({
+                        'Close': '{:,.0f}',
+                        'Change %': '{:.2f}%',
+                        'RSI_14': '{:.1f}',
+                        'Volume': '{:,.0f}',
+                        'Value': '{:,.0f}'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        
         st.markdown('</div>', unsafe_allow_html=True)
     
+    # TAB 6: DATA EXPLORER
     with tab6:
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📉 Technical Scan</div>', unsafe_allow_html=True)
-        st.info("""
-        **Coming Soon Features:**
-        - Multi-timeframe analysis
-        - Pattern recognition
-        - Support/resistance levels
-        - Volume profile analysis
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with tab7:
-        st.markdown('<div class="css-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🔍 Deep Dive Analysis</div>', unsafe_allow_html=True)
-        st.info("""
-        **Coming Soon Features:**
-        - Peer comparison
-        - Valuation metrics
-        - Risk assessment
-        - Scenario analysis
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with tab8:
-        st.markdown('<div class="css-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">📁 Data Explorer</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">📁 Data Explorer & Diagnostics</div>', unsafe_allow_html=True)
         
-        # Quick data exploration
-        st.dataframe(
-            df_merged.describe().T.style.format('{:,.2f}'),
-            use_container_width=True
-        )
+        # Data summary
+        col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+        with col_sum1:
+            st.metric("Total Rows", f"{df_merged.shape[0]:,}")
+        with col_sum2:
+            st.metric("Total Columns", df_merged.shape[1])
+        with col_sum3:
+            missing_pct = (df_merged.isnull().sum().sum() / (len(df_merged) * len(df_merged.columns))) * 100
+            st.metric("Missing Data", f"{missing_pct:.1f}%")
+        with col_sum4:
+            st.metric("Memory Usage", f"{df_merged.memory_usage(deep=True).sum() / 1024 / 1024:.1f} MB")
         
-        with st.expander("🔍 View Sample Data"):
-            st.dataframe(df_merged.head(50), use_container_width=True)
+        # Column explorer
+        st.markdown("##### 🗂️ Column Information")
+        col_info = pd.DataFrame({
+            'Column': df_merged.columns,
+            'Type': df_merged.dtypes.astype(str),
+            'Non-Null': df_merged.count().values,
+            'Unique': df_merged.nunique().values,
+            'Missing %': (df_merged.isnull().sum().values / len(df_merged) * 100).round(1)
+        })
+        st.dataframe(col_info, use_container_width=True, height=400)
         
-        with st.expander("📊 Column Information"):
-            col_info = pd.DataFrame({
-                'Column': df_merged.columns,
-                'Type': df_merged.dtypes.astype(str),
-                'Non-Null': df_merged.count().values,
-                'Null %': (df_merged.isnull().sum().values / len(df_merged) * 100).round(1)
-            })
-            st.dataframe(col_info, use_container_width=True)
+        # Sample data
+        with st.expander("🔍 View Sample Data (100 rows)"):
+            st.dataframe(df_merged.head(100), use_container_width=True)
+        
+        # Data quality report
+        with st.expander("📊 Data Quality Report"):
+            ksei_coverage = (df_merged['Smart_Money_Flow'].notna().sum() / len(df_merged) * 100)
+            daily_coverage = (df_merged['Close'].notna().sum() / len(df_merged) * 100)
+            
+            st.write(f"**KSEI Monthly Data Coverage:** {ksei_coverage:.1f}%")
+            st.write(f"**Daily Trading Data Coverage:** {daily_coverage:.1f}%")
+            st.write(f"**Date Range:** {df_merged['Date'].min().date()} to {df_merged['Date'].max().date()}")
+            st.write(f"**Trading Days:** {(df_merged['Date'].max() - df_merged['Date'].min()).days} days")
+            
+            # Top stocks by data completeness
+            completeness = df_merged.groupby('Stock Code').apply(
+                lambda x: pd.Series({
+                    'KSEI_Data_Points': x['Smart_Money_Flow'].notna().sum(),
+                    'Trading_Days': x['Close'].notna().sum(),
+                    'Completeness_Score': (x['Smart_Money_Flow'].notna().sum() / max(x['Close'].notna().sum(), 1)) * 100
+                })
+            ).reset_index()
+            
+            st.markdown("##### 🏆 Top Stocks by Data Completeness")
+            st.dataframe(
+                completeness.nlargest(10, 'Completeness_Score')
+                .style.format({
+                    'KSEI_Data_Points': '{:.0f}',
+                    'Trading_Days': '{:.0f}',
+                    'Completeness_Score': '{:.1f}%'
+                }),
+                use_container_width=True
+            )
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -1413,9 +1493,9 @@ def main():
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: #A3AED0; font-size: 14px;'>"
-        "💎 HIDDEN GEM FINDER v1.0 • KSEI + Daily TX1Y Merge • "
+        "💎 HIDDEN GEM FINDER v2.0 • Monthly KSEI + Daily TX1Y • "
         f"Data as of {df_merged['Date'].max().strftime('%d %b %Y')} • "
-        f"Total Stocks: {df_merged['Stock Code'].nunique():,}"
+        f"© {datetime.now().year} Hidden Gem Analytics"
         "</div>",
         unsafe_allow_html=True
     )
