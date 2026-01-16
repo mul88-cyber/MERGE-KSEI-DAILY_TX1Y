@@ -400,7 +400,7 @@ class DataLoader:
     
     @st.cache_data(ttl=3600, show_spinner="🔄 Merging Monthly KSEI + Daily Data...")
     def load_merged_data(_self):
-        """Intelligent merge of MONTHLY KSEI + DAILY historical data"""
+        """Intelligent merge of MONTHLY KSEI + DAILY historical data (FIXED)"""
         df_ksei = _self.load_ksei_data()
         df_hist = _self.load_historical_data()
         
@@ -415,7 +415,7 @@ class DataLoader:
             df_ksei_m['Date'] = pd.to_datetime(df_ksei_m['Date'])
             df_hist_m['Date'] = pd.to_datetime(df_hist_m['Date'])
             
-            # Create complete date-stock grid
+            # Create complete date-stock grid to handle gaps
             all_dates = pd.date_range(
                 start=df_hist_m['Date'].min(), 
                 end=df_hist_m['Date'].max(), 
@@ -445,51 +445,61 @@ class DataLoader:
                 'Institutional_Net', 'Free Float', 'Sector',
                 'Ownership_Concentration', 'Price'
             ]
+            
+            # Filter columns that actually exist in KSEI data
             ksei_cols = [col for col in ksei_cols if col in df_ksei_m.columns]
             
             # Forward fill monthly KSEI data to daily
             for col in ksei_cols:
+                # Ambil subset data KSEI
                 temp_ksei = df_ksei_m[['Date', 'Stock Code', col]].copy()
                 temp_ksei = temp_ksei.dropna(subset=[col])
+                
+                # --- FIX: Rename Explicitly Before Merge ---
+                # Ini mencegah error jika kolom tidak ada di tabel kiri
+                raw_col_name = f'{col}_ksei_raw'
+                temp_ksei = temp_ksei.rename(columns={col: raw_col_name})
                 
                 merged = pd.merge(
                     merged,
                     temp_ksei,
                     on=['Date', 'Stock Code'],
-                    how='left',
-                    suffixes=('', '_ksei_raw')
+                    how='left'
                 )
                 
-                merged[col] = merged.groupby('Stock Code')[f'{col}_ksei_raw'].ffill()
-                merged = merged.drop(columns=[f'{col}_ksei_raw'])
+                # Forward fill logic
+                merged[col] = merged.groupby('Stock Code')[raw_col_name].ffill()
+                
+                # Cleanup raw column
+                if raw_col_name in merged.columns:
+                    merged = merged.drop(columns=[raw_col_name])
             
-            # Fill missing Close with KSEI Price
+            # Fill missing Close with KSEI Price if available
             if 'Price' in merged.columns and 'Close' in merged.columns:
                 merged['Close'] = merged['Close'].fillna(merged['Price'])
             
             # Calculate derived metrics
             merged['Price_Change_1D'] = merged.groupby('Stock Code')['Close'].pct_change()
-            merged['Volume_Change_1D'] = merged.groupby('Stock Code')['Volume'].pct_change()
+            
+            if 'Volume' in merged.columns:
+                merged['Volume_Change_1D'] = merged.groupby('Stock Code')['Volume'].pct_change()
             
             if 'Money Flow Value' in merged.columns and 'Value' in merged.columns:
                 merged['MF_Strength'] = merged['Money Flow Value'] / merged['Value'].replace(0, 1)
             
-            # Remove rows with no trading data
-            merged = merged.dropna(subset=['Close', 'Volume'], how='all')
+            # Remove rows with completely no trading data & no ksei data to save memory
+            merged = merged.dropna(subset=['Close', 'Smart_Money_Flow'], how='all')
             
             # Add data type flags
             merged['Has_KSEI_Data'] = merged['Smart_Money_Flow'].notna()
             merged['Has_Daily_Data'] = merged['Close'].notna()
             
-            st.success(f"✅ MERGE COMPLETE: {merged.shape[0]:,} rows × {merged.shape[1]:,} columns")
-            st.write(f"📅 Date Range: {merged['Date'].min().date()} to {merged['Date'].max().date()}")
-            st.write(f"📊 Stocks: {merged['Stock Code'].nunique():,}")
-            st.write(f"📈 KSEI Coverage: {(merged['Has_KSEI_Data'].sum() / len(merged) * 100):.1f}%")
+            st.success(f"✅ MERGE COMPLETE: {merged.shape[0]:,} rows")
             
             return merged
             
         except Exception as e:
-            st.error(f"Merge error: {e}")
+            st.error(f"Merge error detail: {str(e)}")
             return pd.DataFrame()
 
 # ==============================================================================
