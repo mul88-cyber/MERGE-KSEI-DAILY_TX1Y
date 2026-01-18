@@ -1135,7 +1135,7 @@ class EnhancedHiddenGemAnalyzer:
             return 15
         elif liquidity_ratio > 0.5:  # >0.5% daily turnover
             return 12
-        elif liquidity_ratio > 0.2:  >0.2% daily turnover
+        elif liquidity_ratio > 0.2:  # >0.2% daily turnover
             return 10
         elif avg_daily_value > 50e9:  # High absolute value
             return 12
