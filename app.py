@@ -447,77 +447,77 @@ class EnhancedDataLoader:
         self.initialize_gdrive()
     
     def initialize_gdrive(self):
-    """Simple Google Drive initialization - FIXED VERSION"""
-    try:
-        if "gcp_service_account" not in st.secrets:
-            st.error("❌ 'gcp_service_account' not found in secrets.toml")
+        """Simple Google Drive initialization - FIXED VERSION"""
+        try:
+            if "gcp_service_account" not in st.secrets:
+                st.error("❌ 'gcp_service_account' not found in secrets.toml")
+                return False
+            
+            # Get credentials data
+            creds_data = st.secrets["gcp_service_account"]
+            
+            # Parse credentials
+            if isinstance(creds_data, dict):
+                creds_json = creds_data
+            elif isinstance(creds_data, str):
+                # Clean string - remove surrounding quotes if present
+                creds_str = creds_data.strip()
+                
+                # For multi-line JSON in TOML, we might have triple quotes
+                if creds_str.startswith("'''") and creds_str.endswith("'''"):
+                    creds_str = creds_str[3:-3]
+                elif creds_str.startswith('"""') and creds_str.endswith('"""'):
+                    creds_str = creds_str[3:-3]
+                elif creds_str.startswith("'") and creds_str.endswith("'"):
+                    creds_str = creds_str[1:-1]
+                elif creds_str.startswith('"') and creds_str.endswith('"'):
+                    creds_str = creds_str[1:-1]
+                
+                # DEBUG: Show what we're parsing
+                st.write("🔍 Parsing JSON string...")
+                
+                # Parse JSON directly - \n should be preserved as is
+                creds_json = json.loads(creds_str)
+                
+                # After parsing, if private_key has \n, keep it as is
+                # JSON parser will convert \n to actual newline character
+                if 'private_key' in creds_json:
+                    # It should already be correct after json.loads()
+                    pass
+            else:
+                st.error(f"❌ Unknown credentials type: {type(creds_data)}")
+                return False
+            
+            st.success(f"✅ Parsed credentials for: {creds_json.get('client_email', 'Unknown')}")
+            
+            # Create credentials
+            creds = Credentials.from_service_account_info(
+                creds_json,
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
+            
+            # Build service
+            self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
+            
+            # Test connection
+            about = self.service.about().get(fields="user").execute()
+            st.success(f"✅ Google Drive connected: {about.get('user', {}).get('emailAddress', 'Service Account')}")
+            return True
+            
+        except json.JSONDecodeError as e:
+            st.error(f"❌ JSON Parse Error: {e}")
+            st.error(f"Error at position: {e.pos}")
+            
+            # Show more context
+            if 'creds_str' in locals():
+                start = max(0, e.pos - 50)
+                end = min(len(creds_str), e.pos + 50)
+                st.code(f"...{creds_str[start:end]}...", language="text")
+            
             return False
-        
-        # Get credentials data
-        creds_data = st.secrets["gcp_service_account"]
-        
-        # Parse credentials
-        if isinstance(creds_data, dict):
-            creds_json = creds_data
-        elif isinstance(creds_data, str):
-            # Clean string - remove surrounding quotes if present
-            creds_str = creds_data.strip()
-            
-            # For multi-line JSON in TOML, we might have triple quotes
-            if creds_str.startswith("'''") and creds_str.endswith("'''"):
-                creds_str = creds_str[3:-3]
-            elif creds_str.startswith('"""') and creds_str.endswith('"""'):
-                creds_str = creds_str[3:-3]
-            elif creds_str.startswith("'") and creds_str.endswith("'"):
-                creds_str = creds_str[1:-1]
-            elif creds_str.startswith('"') and creds_str.endswith('"'):
-                creds_str = creds_str[1:-1]
-            
-            # DEBUG: Show what we're parsing
-            st.write("🔍 Parsing JSON string...")
-            
-            # Parse JSON directly - \n should be preserved as is
-            creds_json = json.loads(creds_str)
-            
-            # After parsing, if private_key has \n, keep it as is
-            # JSON parser will convert \n to actual newline character
-            if 'private_key' in creds_json:
-                # It should already be correct after json.loads()
-                pass
-        else:
-            st.error(f"❌ Unknown credentials type: {type(creds_data)}")
+        except Exception as e:
+            st.error(f"❌ Google Drive Error: {type(e).__name__}: {str(e)}")
             return False
-        
-        st.success(f"✅ Parsed credentials for: {creds_json.get('client_email', 'Unknown')}")
-        
-        # Create credentials
-        creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=['https://www.googleapis.com/auth/drive.readonly']
-        )
-        
-        # Build service
-        self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
-        
-        # Test connection
-        about = self.service.about().get(fields="user").execute()
-        st.success(f"✅ Google Drive connected: {about.get('user', {}).get('emailAddress', 'Service Account')}")
-        return True
-        
-    except json.JSONDecodeError as e:
-        st.error(f"❌ JSON Parse Error: {e}")
-        st.error(f"Error at position: {e.pos}")
-        
-        # Show more context
-        if 'creds_str' in locals():
-            start = max(0, e.pos - 50)
-            end = min(len(creds_str), e.pos + 50)
-            st.code(f"...{creds_str[start:end]}...", language="text")
-        
-        return False
-    except Exception as e:
-        st.error(f"❌ Google Drive Error: {type(e).__name__}: {str(e)}")
-        return False
     
     # ========== KEEP ALL OTHER METHODS THE SAME ==========
     # JANGAN ganti method-method di bawah ini, hanya method initialize_gdrive() saja
