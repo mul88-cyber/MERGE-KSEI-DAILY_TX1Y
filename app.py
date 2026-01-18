@@ -436,7 +436,7 @@ class ErrorHandler:
 
 
 # ==============================================================================
-# 📦 ENHANCED DATA LOADER - FIXED (NO UI IN CACHE)
+# 📦 ENHANCED DATA LOADER - FIXED FOR TOML/ATTRDICT
 # ==============================================================================
 class EnhancedDataLoader:
     """Enhanced data loader with validation and monitoring"""
@@ -447,7 +447,7 @@ class EnhancedDataLoader:
         self.initialize_gdrive()
     
     def initialize_gdrive(self):
-        """Simple Google Drive initialization"""
+        """Simple Google Drive initialization - Robust Version"""
         try:
             if "gcp_service_account" not in st.secrets:
                 st.error("❌ 'gcp_service_account' not found in secrets.toml")
@@ -456,17 +456,22 @@ class EnhancedDataLoader:
             # Get credentials data
             creds_data = st.secrets["gcp_service_account"]
             
-            # Parse credentials
-            if isinstance(creds_data, dict):
-                creds_json = creds_data
+            # --- LOGIC BARU UNTUK MENANGANI BERBAGAI FORMAT ---
+            
+            # 1. Jika formatnya AttrDict (Bawaan Streamlit secrets.toml format Table)
+            # Kita paksa convert jadi standard Python Dictionary
+            if hasattr(creds_data, "to_dict"):
+                creds_json = creds_data.to_dict()
+            elif hasattr(creds_data, "items"): # Cek if dict-like
+                creds_json = dict(creds_data)
+            
+            # 2. Jika formatnya String (JSON String)
             elif isinstance(creds_data, str):
                 creds_str = creds_data.strip()
-                # Clean quotes logic
                 if (creds_str.startswith("'") and creds_str.endswith("'")) or \
                    (creds_str.startswith('"') and creds_str.endswith('"')):
                     creds_str = creds_str[1:-1]
                 
-                # Handle triple quotes
                 if creds_str.startswith("'''") or creds_str.startswith('"""'):
                     creds_str = creds_str[3:-3]
                 
@@ -475,8 +480,9 @@ class EnhancedDataLoader:
                 st.error(f"❌ Unknown credentials type: {type(creds_data)}")
                 return False
             
+            # ----------------------------------------------------
+
             # Create credentials with STANDARD SCOPE
-            # Menggunakan scope general 'drive' seringkali lebih stabil daripada 'drive.readonly' pada library tertentu
             SCOPES = ['https://www.googleapis.com/auth/drive']
             
             creds = Credentials.from_service_account_info(
@@ -520,14 +526,10 @@ class EnhancedDataLoader:
         except Exception as e:
             return None, f"Download error: {e}"
 
-    # --- PENTING: Hapus semua st.write / st.success dari fungsi ber-decorator cache ---
-    
     @PerformanceMonitor.time_execution
     @st.cache_data(ttl=Config.CACHE_TTL, show_spinner="📅 Loading Monthly KSEI Data...")
     def load_ksei_data(_self):
         """Load KSEI Data (Pure Data Processing)"""
-        # Kita panggil internal method tanpa try-except di sini agar cache menangkap hasil return
-        # Error handling dilakukan di level wrapper jika perlu, tapi untuk cache sebaiknya langsung
         return _self._load_ksei_data_internal()
 
     def _load_ksei_data_internal(self):
@@ -547,7 +549,6 @@ class EnhancedDataLoader:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
         
-        # Derived metrics
         local_cols = [c for c in [f"{col}_chg_Rp" for col in Config.OWNERSHIP_COLS] if 'Local' in c and c in df.columns]
         foreign_cols = [c for c in [f"{col}_chg_Rp" for col in Config.OWNERSHIP_COLS] if 'Foreign' in c and c in df.columns]
         
