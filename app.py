@@ -436,73 +436,123 @@ class ErrorHandler:
 
 
 # ==============================================================================
-# 📦 ENHANCED DATA LOADER
+# 📦 ENHANCED DATA LOADER - SIMPLIFIED WORKING VERSION
 # ==============================================================================
 class EnhancedDataLoader:
-    """Enhanced data loader with validation and monitoring"""
+    """Enhanced data loader with validation and monitoring - SIMPLIFIED WORKING VERSION"""
     
     def __init__(self):
         self.service = None
         self.error_handler = ErrorHandler()
         self.initialize_gdrive()
     
-    def parse_creds_from_secrets(self, creds_data):
-        """Robust credential parsing"""
+    def initialize_gdrive(self):
+        """Simple Google Drive initialization - WORKING VERSION"""
         try:
-            if isinstance(creds_data, dict):
-                return creds_data
+            if "gcp_service_account" not in st.secrets:
+                st.error("❌ 'gcp_service_account' not found in secrets.toml")
+                st.info("Please create a .streamlit/secrets.toml file with your service account credentials")
+                return False
             
-            if isinstance(creds_data, str):
+            # Get credentials data
+            creds_data = st.secrets["gcp_service_account"]
+            
+            # Parse credentials - SIMPLE VERSION
+            if isinstance(creds_data, dict):
+                creds_json = creds_data
+            elif isinstance(creds_data, str):
                 # Clean string
                 creds_str = creds_data.strip()
+                
+                # Remove surrounding quotes if present
                 if (creds_str.startswith("'") and creds_str.endswith("'")) or \
                    (creds_str.startswith('"') and creds_str.endswith('"')):
                     creds_str = creds_str[1:-1]
                 
-                creds_str = creds_str.replace('\\n', '\n').replace('\\\\n', '\n')
+                # Fix newlines in private key (CRITICAL!)
+                creds_str = creds_str.replace('\\n', '\n')
                 
-                try:
-                    return json.loads(creds_str)
-                except json.JSONDecodeError:
-                    import ast
-                    return ast.literal_eval(creds_str)
-            
-            raise ValueError(f"Unknown credentials format: {type(creds_data)}")
-            
-        except Exception as e:
-            self.error_handler.logger.error(f"Credential parsing error: {e}")
-            return None
-    
-    @PerformanceMonitor.time_execution
-    def initialize_gdrive(self):
-        """Initialize Google Drive service"""
-        try:
-            if "gcp_service_account" not in st.secrets:
-                st.error("❌ 'gcp_service_account' not found in secrets.toml")
+                # Parse JSON
+                creds_json = json.loads(creds_str)
+            else:
+                st.error(f"❌ Unknown credentials type: {type(creds_data)}")
                 return False
             
-            creds_data = st.secrets["gcp_service_account"]
-            creds_json = self.parse_creds_from_secrets(creds_data)
-            if creds_json is None:
-                return False
-            
+            # Create credentials
             creds = Credentials.from_service_account_info(
-                creds_json, 
+                creds_json,
                 scopes=['https://www.googleapis.com/auth/drive.readonly']
             )
             
+            # Build service
             self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             
             # Test connection
             about = self.service.about().get(fields="user").execute()
-            st.success(f"✅ Connected: {about.get('user', {}).get('emailAddress', 'Service Account')}")
-            
+            st.success(f"✅ Google Drive connected: {about.get('user', {}).get('emailAddress', 'Service Account')}")
             return True
             
-        except Exception as e:
-            self.error_handler.logger.error(f"GDrive Initialization Error: {e}")
-            st.error(f"❌ GDrive Auth Failed: {str(e)[:100]}")
+        except json.JSONDecodeError as e:
+            st.error(f"❌ JSON Parse Error: {e}")
+            st.error("Please check your secrets.toml format")
+            # Show first 200 chars for debugging
+            if "creds_data" in locals() and isinstance(creds_data, str):
+                st.code(f"First 200 chars: {creds_data[:200]}", language="text")
             return False
+        except Exception as e:
+            st.error(f"❌ Google Drive Error: {type(e).__name__}: {str(e)}")
+            return False
+    
+    # ========== KEEP ALL OTHER METHODS THE SAME ==========
+    # JANGAN ganti method-method di bawah ini, hanya method initialize_gdrive() saja
+    # yang di atas ini
+    
+    def list_files_in_folder(self):
+        """List all files in the folder"""
+        if not self.service:
+            return []
+        
+        try:
+            query = f"'{Config.FOLDER_ID}' in parents and trashed=false"
+            results = self.service.files().list(
+                q=query, 
+                fields="files(id, name, mimeType, size, modifiedTime)",
+                pageSize=100
+            ).execute()
+            
+            return results.get('files', [])
+            
+        except Exception as e:
+            st.error(f"Error listing files: {e}")
+            return []
+    
+    def download_file(self, file_name):
+        """Download file from Google Drive"""
+        if not self.service:
+            return None, "Service not initialized"
+        
+        try:
+            query = f"'{Config.FOLDER_ID}' in parents and name='{file_name}' and trashed=false"
+            results = self.service.files().list(q=query, fields="files(id, name)", pageSize=1).execute()
+            items = results.get('files', [])
+            
+            if not items:
+                return None, f"File '{file_name}' not found"
+            
+            file_id = items[0]['id']
+            request = self.service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            
+            while not done:
+                _, done = downloader.next_chunk()
+            
+            fh.seek(0)
+            return fh, None
+            
+        except Exception as e:
+            return None, f"Download error: {e}"
     
     @PerformanceMonitor.time_execution
     @st.cache_data(ttl=Config.CACHE_TTL, show_spinner="📅 Loading Monthly KSEI Data...")
@@ -515,9 +565,6 @@ class EnhancedDataLoader:
     
     def _load_ksei_data_internal(self):
         """Internal KSEI data loading"""
-        if not self.service:
-            return pd.DataFrame()
-        
         fh, error = self.download_file(Config.FILE_KSEI)
         if error:
             raise Exception(f"KSEI Download: {error}")
@@ -650,38 +697,6 @@ class EnhancedDataLoader:
             df['RSI_14'] = df.groupby('Stock Code')['Close'].transform(calculate_rsi)
         
         return df
-    
-    def download_file(self, file_name):
-        """Download file from Google Drive"""
-        if not self.service:
-            return None, "Service not initialized"
-        
-        try:
-            query = f"'{Config.FOLDER_ID}' in parents and name='{file_name}' and trashed=false"
-            results = self.service.files().list(
-                q=query, 
-                fields="files(id, name)", 
-                pageSize=1
-            ).execute()
-            
-            items = results.get('files', [])
-            if not items:
-                return None, f"File '{file_name}' not found"
-            
-            file_id = items[0]['id']
-            request = self.service.files().get_media(fileId=file_id)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            
-            while not done:
-                _, done = downloader.next_chunk()
-            
-            fh.seek(0)
-            return fh, None
-            
-        except Exception as e:
-            return None, f"Download error: {e}"
     
     @PerformanceMonitor.time_execution
     @st.cache_data(ttl=Config.CACHE_TTL, show_spinner="🔄 Merging Monthly KSEI + Daily Data...")
