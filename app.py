@@ -1065,7 +1065,7 @@ class EnhancedHiddenGemAnalyzer:
             return 10
         elif 60 <= rsi <= 70:  # Mildly overbought
             return 5
-        else:  > 70:  # Overbought
+        else:  # rsi > 70:  # Overbought
             return 0
     
     def _calculate_ma_score(self, latest):
