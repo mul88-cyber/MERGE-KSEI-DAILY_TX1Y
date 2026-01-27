@@ -712,7 +712,10 @@ class EnhancedDataLoader:
 # 🎯 ENHANCED HIDDEN GEM ANALYZER
 # ==============================================================================
 class EnhancedHiddenGemAnalyzer:
-    """Enhanced analyzer with predictive features and volatility scoring"""
+    """
+    Enhanced analyzer with Liquidity Filter & Bandarmology Divergence
+    v3.1 - Enterprise Edition
+    """
     
     def __init__(self, df_merged):
         self.df = df_merged.copy()
@@ -730,7 +733,6 @@ class EnhancedHiddenGemAnalyzer:
         )
     
     def _calculate_enhanced_gem_score_internal(self, stock_code, lookback_days=90):
-        """Internal enhanced scoring logic"""
         stock_data = self.df[self.df['Stock Code'] == stock_code].sort_values('Date')
         if stock_data.empty:
             return {'total_score': 0, 'signal': 'NO DATA', 'signal_color': 'neutral'}
@@ -743,6 +745,10 @@ class EnhancedHiddenGemAnalyzer:
         
         latest = recent_data.iloc[-1]
         monthly_data = self.get_monthly_ksei_data(recent_data)
+        
+        # --- 1. LIQUIDITY CHECK (CRITICAL UPDATE) ---
+        # Hitung rata-rata nilai transaksi harian
+        avg_daily_value = recent_data['Value'].mean() if 'Value' in recent_data.columns else 0
         
         scores = {}
         
@@ -758,11 +764,11 @@ class EnhancedHiddenGemAnalyzer:
         funda_score = self._calculate_fundamental_score(recent_data, latest)
         scores['fundamental'] = min(100, funda_score)
         
-        # 4. VOLATILITY SCORING (15%) - NEW!
+        # 4. VOLATILITY SCORING (15%)
         vol_score = self._calculate_volatility_score(recent_data)
         scores['volatility'] = min(100, vol_score)
         
-        # 5. MARKET REGIME ADJUSTMENT - NEW!
+        # 5. MARKET REGIME ADJUSTMENT
         market_trend = self.analyze_market_trend()
         regime_multiplier = Config.REGIME_MULTIPLIERS.get(market_trend, 1.0)
         
@@ -774,9 +780,27 @@ class EnhancedHiddenGemAnalyzer:
             scores['volatility'] * Config.SCORE_WEIGHTS['volatility']
         ) * regime_multiplier
         
-        # Apply confidence adjustment based on data quality
+        # --- DIVERGENCE BONUS (Bandarmology) ---
+        # Jika Smart Money Akumulasi TAPI Harga Turun/Sideways -> Sinyal Kuat!
+        price_chg = self._calculate_price_change(recent_data)
+        sm_total = self._get_smart_money_total(monthly_data)
+        retail_total = monthly_data['Retail_Flow'].sum() if 'Retail_Flow' in monthly_data.columns else 0
+        
+        divergence_bonus = 0
+        is_divergence = False
+        
+        if sm_total > 5e9 and price_chg < 5: # Akumulasi > 5M tapi harga belum naik 5%
+            divergence_bonus = 10
+            is_divergence = True
+        
+        if sm_total > 0 and retail_total < -sm_total * 0.5: # Retail buang barang masif
+            divergence_bonus += 5
+            
+        total_score += divergence_bonus
+        
+        # Apply confidence adjustment
         data_quality = self._assess_data_quality(stock_data)
-        confidence_multiplier = 0.8 + (data_quality * 0.2)  # 0.8 to 1.0
+        confidence_multiplier = 0.8 + (data_quality * 0.2)
         
         final_score = min(100, max(0, total_score * confidence_multiplier))
         
@@ -784,8 +808,8 @@ class EnhancedHiddenGemAnalyzer:
         forecast = self.predictive.forecast_next_month_flow(stock_code)
         regime_change = self.predictive.detect_regime_change(stock_code)
         
-        # Determine signal
-        signal, signal_color = self._determine_signal(final_score, forecast, regime_change)
+        # Determine signal (Updated Logic)
+        signal, signal_color = self._determine_signal(final_score, forecast, regime_change, avg_daily_value, is_divergence)
         
         return {
             'total_score': round(final_score, 1),
@@ -793,10 +817,12 @@ class EnhancedHiddenGemAnalyzer:
             'signal': signal,
             'signal_color': signal_color,
             'latest_price': latest.get('Close', latest.get('Price', 0)),
-            'price_change_period': self._calculate_price_change(recent_data),
+            'price_change_period': price_chg,
             'sector': latest.get('Sector', 'N/A'),
             'free_float': latest.get('Free Float', 0),
-            'smart_money_total': self._get_smart_money_total(monthly_data),
+            'smart_money_total': sm_total,
+            'avg_daily_value': avg_daily_value, # New Metric
+            'is_divergence': is_divergence, # New Flag
             'positive_months': self._count_positive_months(monthly_data),
             'total_months': len(monthly_data) if not monthly_data.empty else 0,
             'monthly_data_points': len(monthly_data),
@@ -807,9 +833,15 @@ class EnhancedHiddenGemAnalyzer:
             'regime_change': regime_change,
             'data_quality_score': data_quality
         }
-    
+
+    # --- Helper Methods Tetap Sama (Kecuali _determine_signal) ---
+    # (Copy paste method _calculate_smart_money_score sampai _assess_data_quality dari kode lama Anda di sini)
+    # ...
+    # Agar hemat tempat, saya hanya tulis yang berubah:
+
     def _calculate_smart_money_score(self, monthly_data):
         """Calculate smart money accumulation score"""
+        # (Gunakan logika lama Anda di sini, tidak berubah)
         if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns:
             return 50
         
@@ -833,7 +865,7 @@ class EnhancedHiddenGemAnalyzer:
                 trend_score = 12 if sm_values[-1] > sm_values[0] else 0
         else:
             trend_score = 0
-        
+            
         # Retail divergence (0-15 points)
         if 'Retail_Flow' in monthly_data.columns:
             retail_total = monthly_data['Retail_Flow'].sum()
@@ -845,7 +877,7 @@ class EnhancedHiddenGemAnalyzer:
                 divergence_score = 0
         else:
             divergence_score = 0
-        
+            
         # Concentration score (0-10 points)
         if 'Ownership_Concentration' in monthly_data.columns:
             avg_concentration = monthly_data['Ownership_Concentration'].mean()
@@ -857,343 +889,212 @@ class EnhancedHiddenGemAnalyzer:
                 concentration_score = 3
         else:
             concentration_score = 5
-        
+            
         return amount_score + consistency_score + trend_score + divergence_score + concentration_score
-    
+
     def _calculate_technical_score(self, recent_data, latest):
-        """Calculate technical analysis score"""
+        # (Gunakan logika lama, return tech_score)
         tech_score = 50
-        
         if 'Close' in recent_data.columns:
             price_change = self._calculate_price_change(recent_data)
-            
-            # Price position score (0-20)
-            if -15 <= price_change <= 25:
-                price_score = 20
-            elif price_change < -15:
-                price_score = max(5, 25 + price_change)
-            else:
-                price_score = max(0, 25 - price_change)
-            
-            # Volume trend (0-15)
+            if -15 <= price_change <= 25: price_score = 20
+            elif price_change < -15: price_score = max(5, 25 + price_change)
+            else: price_score = max(0, 25 - price_change)
             volume_score = self._calculate_volume_score(recent_data)
-            
-            # RSI score (0-15)
             rsi_score = self._calculate_rsi_score(latest)
-            
-            # Moving average alignment (0-10)
             ma_score = self._calculate_ma_score(latest)
-            
-            # Breakout detection (0-10) - NEW!
             breakout_score = self._detect_breakout(recent_data)
-            
             tech_score = price_score + volume_score + rsi_score + ma_score + breakout_score
-        
         return min(100, max(0, tech_score))
-    
+
     def _calculate_fundamental_score(self, recent_data, latest):
-        """Calculate fundamental score"""
-        funda_score = 50
-        
-        # Free Float analysis (0-20)
+        # (Gunakan logika lama)
         ff_score = self._calculate_free_float_score(latest)
-        
-        # Liquidity score (0-15)
         liquidity_score = self._calculate_liquidity_score(recent_data, latest)
-        
-        # Sector momentum (0-10)
         sector_score = self._calculate_sector_momentum_score(latest.get('Sector', 'N/A'))
-        
-        # Market cap position (0-5) - NEW!
         mcap_score = self._calculate_market_cap_score(latest)
+        return min(100, max(0, ff_score + liquidity_score + sector_score + mcap_score))
         
-        funda_score = ff_score + liquidity_score + sector_score + mcap_score
-        return min(100, max(0, funda_score))
-    
     def _calculate_volatility_score(self, recent_data):
-        """Calculate volatility score (lower volatility = higher score)"""
-        if 'Close' not in recent_data.columns or len(recent_data) < 20:
-            return 50
-        
+        # (Gunakan logika lama)
+        if 'Close' not in recent_data.columns or len(recent_data) < 20: return 50
         returns = recent_data['Close'].pct_change().dropna()
-        if len(returns) < 10:
-            return 50
-        
-        volatility = returns.std() * np.sqrt(252)  # Annualized
-        
-        # Lower volatility = better for hidden gems (0-100 points)
-        if volatility < 0.25:  # < 25% annualized volatility
-            return 100
-        elif volatility < 0.35:
-            return 85
-        elif volatility < 0.50:
-            return 70
-        elif volatility < 0.75:
-            return 50
-        elif volatility < 1.00:
-            return 30
-        else:
-            return 15
+        if len(returns) < 10: return 50
+        volatility = returns.std() * np.sqrt(252)
+        if volatility < 0.25: return 100
+        elif volatility < 0.35: return 85
+        elif volatility < 0.50: return 70
+        elif volatility < 0.75: return 50
+        elif volatility < 1.00: return 30
+        else: return 15
+
+    # ... sertakan helper lain (_calculate_price_change, _calculate_volume_score, dll) dari kode awal ...
+    # Saya skip penulisannya agar tidak terlalu panjang, tapi Pastikan ADA di script Bapak.
     
     def _calculate_price_change(self, recent_data):
-        """Calculate price change over period"""
-        if len(recent_data) < 2 or 'Close' not in recent_data.columns:
-            return 0
-        return ((recent_data.iloc[-1]['Close'] - recent_data.iloc[0]['Close']) / 
-                recent_data.iloc[0]['Close'] * 100)
-    
+        if len(recent_data) < 2 or 'Close' not in recent_data.columns: return 0
+        return ((recent_data.iloc[-1]['Close'] - recent_data.iloc[0]['Close']) / recent_data.iloc[0]['Close'] * 100)
+
     def _calculate_volume_score(self, recent_data):
-        """Calculate volume trend score"""
-        if 'Volume' not in recent_data.columns or len(recent_data) < 10:
-            return 10
-        
+        if 'Volume' not in recent_data.columns or len(recent_data) < 10: return 10
         avg_volume = recent_data['Volume'].mean()
         recent_avg = recent_data['Volume'].tail(10).mean()
-        
         if avg_volume > 0:
             volume_ratio = recent_avg / avg_volume
-            if volume_ratio > 1.5:
-                return 15
-            elif volume_ratio > 1.2:
-                return 12
-            elif volume_ratio > 0.8:
-                return 8
-            else:
-                return 5
+            if volume_ratio > 1.5: return 15
+            elif volume_ratio > 1.2: return 12
+            elif volume_ratio > 0.8: return 8
+            else: return 5
         return 5
-    
+
     def _calculate_rsi_score(self, latest):
-        """Calculate RSI score"""
-        if 'RSI_14' not in latest:
-            return 8
-        
+        if 'RSI_14' not in latest: return 8
         rsi = latest['RSI_14']
-        if 30 <= rsi <= 40:  # Mildly oversold = best for accumulation
-            return 15
-        elif rsi < 30:  # Very oversold
-            return 20
-        elif 40 < rsi < 60:  # Neutral
-            return 10
-        elif 60 <= rsi <= 70:  # Mildly overbought
-            return 5
-        else:  # rsi > 70:  # Overbought
-            return 0
-    
+        if 30 <= rsi <= 40: return 15
+        elif rsi < 30: return 20
+        elif 40 < rsi < 60: return 10
+        elif 60 <= rsi <= 70: return 5
+        else: return 0
+
     def _calculate_ma_score(self, latest):
-        """Calculate moving average score"""
-        if 'Price_MA20' not in latest or 'Price_MA50' not in latest:
-            return 5
-        
-        if latest['Close'] > latest['Price_MA20'] > latest['Price_MA50']:
-            return 10
-        elif latest['Close'] > latest['Price_MA20']:
-            return 7
-        else:
-            return 3
-    
+        if 'Price_MA20' not in latest or 'Price_MA50' not in latest: return 5
+        if latest['Close'] > latest['Price_MA20'] > latest['Price_MA50']: return 10
+        elif latest['Close'] > latest['Price_MA20']: return 7
+        else: return 3
+
     def _detect_breakout(self, recent_data):
-        """Detect price breakout patterns"""
-        if len(recent_data) < 20 or 'Close' not in recent_data.columns:
-            return 5
-        
+        if len(recent_data) < 20 or 'Close' not in recent_data.columns: return 5
         recent_prices = recent_data['Close'].tail(10).values
         prev_prices = recent_data['Close'].iloc[-20:-10].values
-        
-        if len(recent_prices) < 5 or len(prev_prices) < 5:
-            return 5
-        
+        if len(recent_prices) < 5 or len(prev_prices) < 5: return 5
         recent_high = np.max(recent_prices)
         prev_high = np.max(prev_prices)
+        if recent_high > prev_high * 1.05: return 10
+        elif recent_high > prev_high * 1.02: return 7
+        else: return 5
         
-        if recent_high > prev_high * 1.05:  # 5% breakout
-            return 10
-        elif recent_high > prev_high * 1.02:  # 2% breakout
-            return 7
-        else:
-            return 5
-    
     def _calculate_free_float_score(self, latest):
-        """Calculate free float score"""
-        if 'Free Float' not in latest:
-            return 10
-        
+        if 'Free Float' not in latest: return 10
         ff = latest['Free Float']
-        if 20 <= ff <= 40:  # Ideal range for hidden gems
-            return 20
-        elif ff < 20:  # Too concentrated
-            return 15
-        elif ff < 10:  # Very concentrated
-            return 10
-        elif ff > 60:  # Too liquid, less room for institutional accumulation
-            return 5
-        else:  # 40-60%
-            return 15
-    
+        if 20 <= ff <= 40: return 20
+        elif ff < 20: return 15
+        elif ff < 10: return 10
+        elif ff > 60: return 5
+        else: return 15
+
     def _calculate_liquidity_score(self, recent_data, latest):
-        """Calculate liquidity score"""
-        if 'Value' not in recent_data.columns:
-            return 8
-        
+        if 'Value' not in recent_data.columns: return 8
         avg_daily_value = recent_data['Value'].mean()
-        
         if 'Listed Shares' in latest and latest['Close'] > 0:
             market_cap = latest['Close'] * latest['Listed Shares']
             liquidity_ratio = avg_daily_value / market_cap * 100 if market_cap > 0 else 0
-        else:
-            liquidity_ratio = 0
-        
-        if liquidity_ratio > 1.0:  # >1% daily turnover
-            return 15
-        elif liquidity_ratio > 0.5:  # >0.5% daily turnover
-            return 12
-        elif liquidity_ratio > 0.2:  # >0.2% daily turnover
-            return 10
-        elif avg_daily_value > 50e9:  # High absolute value
-            return 12
-        elif avg_daily_value > 20e9:
-            return 10
-        else:
-            return 5
-    
+        else: liquidity_ratio = 0
+        if liquidity_ratio > 1.0: return 15
+        elif liquidity_ratio > 0.5: return 12
+        elif liquidity_ratio > 0.2: return 10
+        elif avg_daily_value > 50e9: return 12
+        elif avg_daily_value > 20e9: return 10
+        else: return 5
+
     def _calculate_sector_momentum_score(self, sector):
-        """Calculate sector momentum score (placeholder)"""
-        return 8  # Placeholder - could be enhanced with sector rotation data
-    
+        return 8 
+
     def _calculate_market_cap_score(self, latest):
-        """Calculate market cap score (smaller = better for hidden gems)"""
-        if 'Close' not in latest or 'Listed Shares' not in latest:
-            return 3
-        
+        if 'Close' not in latest or 'Listed Shares' not in latest: return 3
         market_cap = latest['Close'] * latest['Listed Shares']
-        market_cap_t = market_cap / 1e12  # Convert to trillions
-        
-        if market_cap_t < 1:  # Small cap < 1T
-            return 5
-        elif market_cap_t < 5:  # Mid cap 1-5T
-            return 3
-        elif market_cap_t < 20:  # Large cap 5-20T
-            return 1
-        else:  # Mega cap > 20T
-            return 0
-    
+        market_cap_t = market_cap / 1e12 
+        if market_cap_t < 1: return 5
+        elif market_cap_t < 5: return 3
+        elif market_cap_t < 20: return 1
+        else: return 0
+
     def _calculate_annualized_volatility(self, recent_data):
-        """Calculate annualized volatility"""
-        if 'Close' not in recent_data.columns or len(recent_data) < 20:
-            return 0
-        
+        if 'Close' not in recent_data.columns or len(recent_data) < 20: return 0
         returns = recent_data['Close'].pct_change().dropna()
-        if len(returns) < 10:
-            return 0
-        
+        if len(returns) < 10: return 0
         return returns.std() * np.sqrt(252)
-    
+
     def _assess_data_quality(self, stock_data):
-        """Assess data quality (0.0 to 1.0)"""
-        if stock_data.empty:
-            return 0.0
-        
+        if stock_data.empty: return 0.0
         quality_score = 0.0
-        
-        # Check KSEI data coverage
         if 'Smart_Money_Flow' in stock_data.columns:
             ksei_coverage = stock_data['Smart_Money_Flow'].notna().sum() / len(stock_data)
             quality_score += ksei_coverage * 0.4
-        
-        # Check trading data coverage
         if 'Close' in stock_data.columns:
             trading_coverage = stock_data['Close'].notna().sum() / len(stock_data)
             quality_score += trading_coverage * 0.4
-        
-        # Check data recency
         days_since_last = (self.latest_date - stock_data['Date'].max()).days
-        recency_score = max(0, 1 - (days_since_last / 30))  # Penalize if >30 days old
+        recency_score = max(0, 1 - (days_since_last / 30))
         quality_score += recency_score * 0.2
-        
         return min(1.0, quality_score)
-    
-    def _determine_signal(self, score, forecast, regime_change):
-        """Determine buy/sell signal"""
-        if score >= 85:
-            if regime_change == "ACCELERATING_ACCUMULATION":
-                return "💎 STRONG BUY - ACCELERATING", "buy"
-            return "💎 STRONG BUY", "buy"
-        elif score >= 75:
-            if forecast and forecast.get('trend') == 'up':
-                return "🔥 ACCUMULATE - POSITIVE FORECAST", "buy"
-            return "🔥 ACCUMULATE", "buy"
-        elif score >= 65:
-            if regime_change == "ACCELERATING_DISTRIBUTION":
-                return "⚠️ CAUTION - DISTRIBUTING", "neutral"
-            return "📈 WATCH", "neutral"
-        elif score >= 55:
-            return "⚖️ NEUTRAL", "neutral"
-        else:
-            if regime_change == "ACCELERATING_DISTRIBUTION":
-                return "🚫 AVOID - HEAVY DISTRIBUTION", "sell"
-            return "⏸️ AVOID", "sell"
-    
-    def get_monthly_ksei_data(self, stock_data):
-        """Extract monthly KSEI data points"""
-        if stock_data.empty:
-            return pd.DataFrame()
         
+    def get_monthly_ksei_data(self, stock_data):
+        if stock_data.empty: return pd.DataFrame()
         stock_data = stock_data.copy()
         stock_data['Month'] = stock_data['Date'].dt.to_period('M')
-        
         monthly_data = stock_data.dropna(subset=['Smart_Money_Flow']).copy()
         if not monthly_data.empty:
             monthly_data = monthly_data.sort_values('Date').groupby('Month').last().reset_index()
-        
         return monthly_data
-    
-    def _get_smart_money_total(self, monthly_data):
-        """Get total smart money flow"""
-        if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns:
-            return 0
-        return monthly_data['Smart_Money_Flow'].sum()
-    
-    def _count_positive_months(self, monthly_data):
-        """Count positive smart money months"""
-        if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns:
-            return 0
-        return (monthly_data['Smart_Money_Flow'] > 0).sum()
-    
-    def _calculate_volume_ratio(self, recent_data):
-        """Calculate volume ratio"""
-        if 'Volume' not in recent_data.columns or len(recent_data) < 10:
-            return 1.0
         
+    def _get_smart_money_total(self, monthly_data):
+        if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns: return 0
+        return monthly_data['Smart_Money_Flow'].sum()
+
+    def _count_positive_months(self, monthly_data):
+        if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns: return 0
+        return (monthly_data['Smart_Money_Flow'] > 0).sum()
+        
+    def _calculate_volume_ratio(self, recent_data):
+        if 'Volume' not in recent_data.columns or len(recent_data) < 10: return 1.0
         avg_volume = recent_data['Volume'].mean()
         recent_avg = recent_data['Volume'].tail(10).mean()
-        
-        if avg_volume > 0:
-            return recent_avg / avg_volume
+        if avg_volume > 0: return recent_avg / avg_volume
         return 1.0
-    
+
     def analyze_market_trend(self):
-        """Analyze overall market trend"""
-        # Simple market trend analysis based on index stocks
         index_stocks = ['BBCA', 'BBRI', 'BMRI', 'TLKM', 'ASII']
         index_data = self.df[self.df['Stock Code'].isin(index_stocks)]
-        
-        if index_data.empty:
-            return 'neutral'
-        
+        if index_data.empty: return 'neutral'
         latest_index = index_data[index_data['Date'] == self.latest_date]
-        if latest_index.empty:
-            return 'neutral'
-        
+        if latest_index.empty: return 'neutral'
         avg_change = latest_index['Change %'].mean() if 'Change %' in latest_index.columns else 0
+        if avg_change > 1.0: return 'bull'
+        elif avg_change < -1.0: return 'bear'
+        elif avg_change < -0.5: return 'correction'
+        else: return 'neutral'
+
+    def _determine_signal(self, score, forecast, regime_change, avg_daily_value, is_divergence):
+        """Determine buy/sell signal with Liquidity & Divergence checks"""
         
-        if avg_change > 1.0:
-            return 'bull'
-        elif avg_change < -1.0:
-            return 'bear'
-        elif avg_change < -0.5:
-            return 'correction'
+        # 1. LIQUIDITY FILTER (The 'Anti-Zonk' Rule)
+        # Jika rata-rata transaksi < 2 Miliar/hari, labeli sebagai Tidak Likuid
+        if avg_daily_value < 2e9:
+            return "⚠️ LOW LIQUIDITY", "neutral"
+        
+        # 2. SIGNAL LOGIC
+        if score >= 85:
+            if is_divergence:
+                return "💎 HIDDEN GEM (Strong Acc + Divergence)", "buy"
+            if regime_change == "ACCELERATING_ACCUMULATION":
+                return "🚀 BREAKOUT READY", "buy"
+            return "💎 STRONG BUY", "buy"
+            
+        elif score >= 75:
+            if is_divergence:
+                return "🔥 SMART MONEY ENTRY", "buy"
+            if forecast and forecast.get('trend') == 'up':
+                return "📈 ACCUMULATING", "buy"
+            return "👀 WATCHLIST", "buy"
+            
+        elif score >= 65:
+            if regime_change == "ACCELERATING_DISTRIBUTION":
+                return "⚠️ CAUTION - DISTRIBUTING", "neutral"
+            return "⚖️ NEUTRAL", "neutral"
+            
         else:
-            return 'neutral'
-    
+            return "🚫 AVOID", "sell"
+
     @PerformanceMonitor.time_execution
     def find_top_gems(self, top_n=25, min_score=65, sector_filter=None):
         """Find top hidden gem candidates with parallel processing"""
@@ -1204,10 +1105,10 @@ class EnhancedHiddenGemAnalyzer:
         status_text = st.empty()
         total_stocks = len(unique_stocks)
         
-        # Use ThreadPoolExecutor for parallel processing
+        from concurrent.futures import as_completed # Import local biar aman
+
         with ThreadPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {}
-            
             for i, stock in enumerate(unique_stocks):
                 futures[executor.submit(self.calculate_enhanced_gem_score, stock)] = stock
             
@@ -1219,10 +1120,18 @@ class EnhancedHiddenGemAnalyzer:
                 try:
                     score_data = future.result(timeout=5)
                     
+                    # --- ENTERPRISE FILTERING ---
                     if score_data and score_data['total_score'] >= min_score:
+                        
+                        # Filter 1: Sektor
                         if sector_filter and score_data['sector'] != sector_filter:
                             continue
                         
+                        # Filter 2: Likuiditas Minimum (Hapus saham mati)
+                        # Kita sedikit longgar di sini (1M), filter ketat di UI nanti
+                        if score_data['avg_daily_value'] < 1e9: 
+                            continue
+
                         results.append({
                             'Stock': stock,
                             'Gem Score': score_data['total_score'],
@@ -1238,28 +1147,28 @@ class EnhancedHiddenGemAnalyzer:
                             'RSI': score_data['rsi'],
                             'Volatility %': score_data.get('volatility', 0) * 100,
                             'Volume Trend': score_data.get('volume_ratio', 1),
-                            'Smart Score': score_data['component_scores'].get('smart_money', 0),
-                            'Tech Score': score_data['component_scores'].get('technical', 0),
-                            'Fundamental Score': score_data['component_scores'].get('fundamental', 0),
-                            'Volatility Score': score_data['component_scores'].get('volatility', 0),
                             'Data Quality': score_data.get('data_quality_score', 0) * 100,
-                            'Regime Change': score_data.get('regime_change', 'STABLE')
+                            'Regime Change': score_data.get('regime_change', 'STABLE'),
+                            'Avg Value (B)': score_data['avg_daily_value'] / 1e9, # New Col
+                            'Divergence': '✅' if score_data['is_divergence'] else '-' # New Col
                         })
                 
                 except Exception as e:
                     self.error_handler.logger.error(f"Error processing {stock}: {e}")
                 
                 # Update progress
-                progress = completed / total_stocks
-                progress_bar.progress(progress)
-                status_text.text(f"🔍 Analyzing... {completed}/{total_stocks} stocks")
+                if completed % 5 == 0: # Update tiap 5 saham biar UI tidak lag
+                    progress = completed / total_stocks
+                    progress_bar.progress(progress)
+                    status_text.text(f"🔍 Analyzing... {completed}/{total_stocks} stocks")
         
         progress_bar.empty()
         status_text.empty()
         
         if results:
             df_results = pd.DataFrame(results)
-            df_results = df_results.sort_values('Gem Score', ascending=False).head(top_n)
+            # Prioritaskan yang ada Divergence Bandarmology
+            df_results = df_results.sort_values(['Gem Score', 'Divergence'], ascending=[False, False]).head(top_n)
             return df_results
         else:
             return pd.DataFrame()
