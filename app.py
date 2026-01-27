@@ -447,38 +447,51 @@ class EnhancedDataLoader:
         self.initialize_gdrive()
     
     def initialize_gdrive(self):
-        """Simple Google Drive initialization - Robust Version"""
+        """Robust Google Drive Initialization with Key Fixing"""
         try:
+            # 1. Cek keberadaan secrets
             if "gcp_service_account" not in st.secrets:
-                st.error("❌ 'gcp_service_account' not found in secrets.toml")
+                st.error("❌ 'gcp_service_account' section missing in secrets.toml")
                 return False
             
-            # Get credentials data
+            # 2. Konversi ke Dictionary standar (menangani AttrDict dari Streamlit)
             creds_data = st.secrets["gcp_service_account"]
-            
-            # --- LOGIC BARU UNTUK MENANGANI BERBAGAI FORMAT ---
-            
-            # 1. Jika formatnya AttrDict (Bawaan Streamlit secrets.toml format Table)
-            # Kita paksa convert jadi standard Python Dictionary
             if hasattr(creds_data, "to_dict"):
                 creds_json = creds_data.to_dict()
-            elif hasattr(creds_data, "items"): # Cek if dict-like
-                creds_json = dict(creds_data)
-            
-            # 2. Jika formatnya String (JSON String)
-            elif isinstance(creds_data, str):
-                creds_str = creds_data.strip()
-                if (creds_str.startswith("'") and creds_str.endswith("'")) or \
-                   (creds_str.startswith('"') and creds_str.endswith('"')):
-                    creds_str = creds_str[1:-1]
-                
-                if creds_str.startswith("'''") or creds_str.startswith('"""'):
-                    creds_str = creds_str[3:-3]
-                
-                creds_json = json.loads(creds_str)
             else:
-                st.error(f"❌ Unknown credentials type: {type(creds_data)}")
-                return False
+                creds_json = dict(creds_data)
+
+            # 3. 🛡️ CRITICAL FIX: Sanitasi Private Key
+            # Masalah utama biasanya disini: \n dianggap text biasa, bukan enter.
+            if "private_key" in creds_json:
+                private_key = creds_json["private_key"]
+                # Ganti literal \n dengan actual newline character
+                creds_json["private_key"] = private_key.replace("\\n", "\n")
+
+            # 4. Create credentials
+            SCOPES = ['https://www.googleapis.com/auth/drive']
+            creds = Credentials.from_service_account_info(
+                creds_json,
+                scopes=SCOPES
+            )
+            
+            # 5. Build service
+            self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
+            
+            # Test koneksi kecil (optional, untuk memastikan auth valid)
+            self.service.files().list(pageSize=1).execute()
+            
+            return True
+            
+        except Exception as e:
+            # Tampilkan error detail agar kita tahu salahnya dimana
+            st.error(f"❌ Google Drive Auth Error: {str(e)}")
+            # Hint spesifik untuk error umum
+            if "Invalid JWT" in str(e) or "ValueError" in str(e):
+                st.warning("💡 Tip: Kemungkinan format 'private_key' di secrets.toml bermasalah.")
+            if "accessNotConfigured" in str(e):
+                st.warning("💡 Tip: Google Drive API belum di-enable di Google Cloud Console.")
+            return False
             
             # ----------------------------------------------------
 
