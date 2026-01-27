@@ -1899,11 +1899,13 @@ def main():
                         </div>
                         """, unsafe_allow_html=True)
                     
+
                     # Sector heatmap
                     st.markdown("#### 🗺️ Sector Distribution")
                     heatmap = viz.create_sector_heatmap(filtered_df)
                     if heatmap:
-                        st.plotly_chart(heatmap, use_container_width=True)
+                        # 👇 PERBAIKAN: Tambahkan key="sector_heatmap"
+                        st.plotly_chart(heatmap, use_container_width=True, key="sector_heatmap")
                     
                     # Correlation heatmap
                     st.markdown("#### 🔗 Factor Correlation")
@@ -1912,7 +1914,8 @@ def main():
                     if correlation_data is not None:
                         corr_heatmap = viz.create_correlation_heatmap(correlation_data)
                         if corr_heatmap:
-                            st.plotly_chart(corr_heatmap, use_container_width=True)
+                            # 👇 PERBAIKAN: Tambahkan key="corr_heatmap"
+                            st.plotly_chart(corr_heatmap, use_container_width=True, key="corr_heatmap")
                     
                     # Gems table with enhanced formatting
                     st.markdown("#### 🏆 Filtered Gem Candidates")
@@ -2025,7 +2028,7 @@ def main():
                             st.markdown("##### 📈 Score Evolution")
                             timeline = viz.create_gem_timeline_evolution(analyzer, top_gem, df_merged)
                             if timeline:
-                                st.plotly_chart(timeline, use_container_width=True)
+                                st.plotly_chart(timeline, use_container_width=True, key=f"evolution_{selected_stock}")
                             
                             # Detailed analysis
                             with st.expander(f"📊 Detailed Analysis: {top_gem}"):
@@ -2129,19 +2132,19 @@ def main():
                 # Charts
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
+                    # 👇 PERBAIKAN: Tambahkan key dengan nama saham agar unik
                     st.plotly_chart(
-                        viz.create_gem_radar_chart(
-                            score_data['component_scores'], 
-                            selected_stock, 
-                            score_data['signal']
-                        ),
-                        use_container_width=True
+                        viz.create_gem_radar_chart(...),
+                        use_container_width=True,
+                        key=f"radar_{selected_stock}" # <-- Pakai f-string biar unik per saham
                     )
                 
                 with col_c2:
+                    # 👇 PERBAIKAN: Tambahkan key
                     st.plotly_chart(
                         viz.create_ownership_timeline(df_merged, selected_stock),
-                        use_container_width=True
+                        use_container_width=True,
+                        key=f"timeline_{selected_stock}" # <-- Pakai f-string
                     )
                 
                 # Data quality and predictive info
