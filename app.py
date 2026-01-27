@@ -2082,36 +2082,44 @@ def main():
                         if st.button("💼 Simulate Portfolio", use_container_width=True):
                             st.session_state.simulate_portfolio = True
                     
+                    
                     # Top gem deep dive
                     if len(filtered_df) > 0:
                         st.markdown("#### 🎯 Top Gem Deep Dive")
-                        top_gem = filtered_df.iloc[0]['Stock']
+                        
+                        # Variabel di sini namanya top_gem, BUKAN selected_stock
+                        top_gem = filtered_df.iloc[0]['Stock'] 
                         score_data = analyzer.calculate_enhanced_gem_score(top_gem, lookback_days)
                         
                         if score_data:
                             col_ana1, col_ana2 = st.columns(2)
                             
                             with col_ana1:
+                                # 👇 PERBAIKAN DISINI: Gunakan top_gem, JANGAN selected_stock
                                 st.plotly_chart(
                                     viz.create_gem_radar_chart(
                                         score_data['component_scores'], 
                                         top_gem, 
                                         score_data['signal']
                                     ),
-                                    use_container_width=True
+                                    use_container_width=True,
+                                    key=f"radar_top_{top_gem}" # <-- Ganti jadi top_gem
                                 )
                             
                             with col_ana2:
+                                # 👇 PERBAIKAN DISINI: Gunakan top_gem
                                 st.plotly_chart(
                                     viz.create_ownership_timeline(df_merged, top_gem),
-                                    use_container_width=True
+                                    use_container_width=True,
+                                    key=f"timeline_top_{top_gem}" # <-- Ganti jadi top_gem
                                 )
                             
                             # Timeline evolution
                             st.markdown("##### 📈 Score Evolution")
                             timeline = viz.create_gem_timeline_evolution(analyzer, top_gem, df_merged)
                             if timeline:
-                                st.plotly_chart(timeline, use_container_width=True, key=f"evolution_{selected_stock}")
+                                # 👇 PERBAIKAN DISINI: Gunakan top_gem
+                                st.plotly_chart(timeline, use_container_width=True, key=f"evolution_top_{top_gem}")
                             
                             # Detailed analysis
                             with st.expander(f"📊 Detailed Analysis: {top_gem}"):
