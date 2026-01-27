@@ -28,7 +28,7 @@ from googleapiclient.http import MediaIoBaseDownload
 # ==============================================================================
 class Config:
     """Centralized configuration"""
-    FOLDER_ID = "1hX2jwUrAgi4Fr8xkcFWjCW6vbk6lsIlP"
+    FOLDER_ID = "1hX2jwUrAgi4Fr8xkcFWjCW6vbk6lsIlP" # Sesuaikan jika berubah
     FILE_KSEI = "KSEI_Shareholder_Processed.csv"
     FILE_HIST = "Kompilasi_Data_1Tahun.csv"
     
@@ -43,9 +43,11 @@ class Config:
     # Performance settings
     MAX_WORKERS = 4
     CACHE_TTL = 3600
-    MAX_STOCKS_ANALYZED = 200
     
-    # Scoring weights
+    # 👇 UPDATE DISINI: Ganti 200 jadi 1000 atau None
+    MAX_STOCKS_ANALYZED = 2000 
+    
+    # Scoring weights & Regimes (tetap sama)
     SCORE_WEIGHTS = {
         'smart_money': 0.40,
         'technical': 0.30,
@@ -53,7 +55,6 @@ class Config:
         'volatility': 0.15
     }
     
-    # Market regimes
     REGIME_MULTIPLIERS = {
         'bull': 1.1,
         'neutral': 1.0,
