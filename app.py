@@ -565,9 +565,12 @@ class EnhancedDataLoader:
         df['Total_Foreign_chg_Rp'] = df[foreign_cols].sum(axis=1) if foreign_cols else 0
         df['Total_chg_Rp'] = df['Total_Local_chg_Rp'] + df['Total_Foreign_chg_Rp']
         
+        # --- UPDATE DISINI: Menambahkan Local CP (Corporate) ke Smart Money ---
+        # Logic Bapak: Local CP akumulasi = Bullish Signal
         smart_money_cols = [
             'Foreign IS_chg_Rp', 'Foreign IB_chg_Rp', 'Foreign PF_chg_Rp',
-            'Local IS_chg_Rp', 'Local PF_chg_Rp', 'Local MF_chg_Rp', 'Local IB_chg_Rp'
+            'Local IS_chg_Rp', 'Local PF_chg_Rp', 'Local MF_chg_Rp', 'Local IB_chg_Rp',
+            'Local CP_chg_Rp' # <--- TAMBAHAN KRUSIAL
         ]
         smart_money_cols = [c for c in smart_money_cols if c in df.columns]
         df['Smart_Money_Flow'] = df[smart_money_cols].sum(axis=1) if smart_money_cols else 0
@@ -713,8 +716,7 @@ class EnhancedDataLoader:
 # ==============================================================================
 class EnhancedHiddenGemAnalyzer:
     """
-    Enhanced analyzer with Liquidity Filter & Bandarmology Divergence
-    v3.1 - Enterprise Edition
+    Enhanced analyzer v3.2 - Relaxed Filters & Local CP Logic
     """
     
     def __init__(self, df_merged):
@@ -725,7 +727,6 @@ class EnhancedHiddenGemAnalyzer:
     
     @PerformanceMonitor.time_execution
     def calculate_enhanced_gem_score(self, stock_code, lookback_days=90):
-        """Enhanced scoring with volatility and market regime"""
         return self.error_handler.safe_execute(
             self._calculate_enhanced_gem_score_internal,
             stock_code, lookback_days,
@@ -745,34 +746,29 @@ class EnhancedHiddenGemAnalyzer:
         
         latest = recent_data.iloc[-1]
         monthly_data = self.get_monthly_ksei_data(recent_data)
-        
-        # --- 1. LIQUIDITY CHECK (CRITICAL UPDATE) ---
-        # Hitung rata-rata nilai transaksi harian
         avg_daily_value = recent_data['Value'].mean() if 'Value' in recent_data.columns else 0
         
         scores = {}
         
-        # 1. SMART MONEY ACCUMULATION (40%)
+        # 1. SMART MONEY (Include Local CP now)
         sm_score = self._calculate_smart_money_score(monthly_data)
         scores['smart_money'] = min(100, sm_score)
         
-        # 2. TECHNICAL ANALYSIS (30%)
+        # 2. TECHNICAL
         tech_score = self._calculate_technical_score(recent_data, latest)
         scores['technical'] = min(100, tech_score)
         
-        # 3. FUNDAMENTAL & STRUCTURAL (15%)
+        # 3. FUNDAMENTAL
         funda_score = self._calculate_fundamental_score(recent_data, latest)
         scores['fundamental'] = min(100, funda_score)
         
-        # 4. VOLATILITY SCORING (15%)
+        # 4. VOLATILITY
         vol_score = self._calculate_volatility_score(recent_data)
         scores['volatility'] = min(100, vol_score)
         
-        # 5. MARKET REGIME ADJUSTMENT
         market_trend = self.analyze_market_trend()
         regime_multiplier = Config.REGIME_MULTIPLIERS.get(market_trend, 1.0)
         
-        # Calculate weighted total
         total_score = (
             scores['smart_money'] * Config.SCORE_WEIGHTS['smart_money'] +
             scores['technical'] * Config.SCORE_WEIGHTS['technical'] +
@@ -780,8 +776,7 @@ class EnhancedHiddenGemAnalyzer:
             scores['volatility'] * Config.SCORE_WEIGHTS['volatility']
         ) * regime_multiplier
         
-        # --- DIVERGENCE BONUS (Bandarmology) ---
-        # Jika Smart Money Akumulasi TAPI Harga Turun/Sideways -> Sinyal Kuat!
+        # --- DIVERGENCE BONUS ---
         price_chg = self._calculate_price_change(recent_data)
         sm_total = self._get_smart_money_total(monthly_data)
         retail_total = monthly_data['Retail_Flow'].sum() if 'Retail_Flow' in monthly_data.columns else 0
@@ -789,26 +784,23 @@ class EnhancedHiddenGemAnalyzer:
         divergence_bonus = 0
         is_divergence = False
         
-        if sm_total > 5e9 and price_chg < 5: # Akumulasi > 5M tapi harga belum naik 5%
-            divergence_bonus = 10
+        # Relaxed Divergence Rule
+        if sm_total > 2e9 and price_chg < 10: # Akumulasi >2M dan harga belum terbang
+            divergence_bonus += 5
             is_divergence = True
         
-        if sm_total > 0 and retail_total < -sm_total * 0.5: # Retail buang barang masif
+        if sm_total > 0 and retail_total < 0: # Sederhana: SM Masuk, Ritel Keluar
             divergence_bonus += 5
             
         total_score += divergence_bonus
         
-        # Apply confidence adjustment
         data_quality = self._assess_data_quality(stock_data)
         confidence_multiplier = 0.8 + (data_quality * 0.2)
-        
         final_score = min(100, max(0, total_score * confidence_multiplier))
         
-        # Get predictive forecast
         forecast = self.predictive.forecast_next_month_flow(stock_code)
         regime_change = self.predictive.detect_regime_change(stock_code)
         
-        # Determine signal (Updated Logic)
         signal, signal_color = self._determine_signal(final_score, forecast, regime_change, avg_daily_value, is_divergence)
         
         return {
@@ -821,8 +813,8 @@ class EnhancedHiddenGemAnalyzer:
             'sector': latest.get('Sector', 'N/A'),
             'free_float': latest.get('Free Float', 0),
             'smart_money_total': sm_total,
-            'avg_daily_value': avg_daily_value, # New Metric
-            'is_divergence': is_divergence, # New Flag
+            'avg_daily_value': avg_daily_value,
+            'is_divergence': is_divergence,
             'positive_months': self._count_positive_months(monthly_data),
             'total_months': len(monthly_data) if not monthly_data.empty else 0,
             'monthly_data_points': len(monthly_data),
@@ -834,14 +826,119 @@ class EnhancedHiddenGemAnalyzer:
             'data_quality_score': data_quality
         }
 
-    # --- Helper Methods Tetap Sama (Kecuali _determine_signal) ---
-    # (Copy paste method _calculate_smart_money_score sampai _assess_data_quality dari kode lama Anda di sini)
-    # ...
-    # Agar hemat tempat, saya hanya tulis yang berubah:
+    # ... [Copy paste method helper yang tidak berubah: _calculate_smart_money_score, dll] ...
+    # Pastikan method helper tetap ada seperti kode sebelumnya
+    # Saya tulis ulang method yang berubah logikanya saja:
 
+    def _determine_signal(self, score, forecast, regime_change, avg_daily_value, is_divergence):
+        """Relaxed Signal Determination"""
+        
+        liquidity_flag = ""
+        # Hanya beri warning visual, JANGAN ubah sinyal jadi neutral jika skor tinggi
+        if avg_daily_value < 500e6: # < 500 Juta
+            liquidity_flag = " ⚠️ ILIQUID"
+        
+        # RELAXED THRESHOLDS
+        if score >= 80: # Turun dari 85
+            prefix = "💎 TOP PICK"
+            if is_divergence: prefix += " (Div)"
+            return f"{prefix}{liquidity_flag}", "buy"
+            
+        elif score >= 70: # Turun dari 75
+            prefix = "🔥 BUY"
+            if forecast and forecast.get('trend') == 'up': prefix += " (Fcst)"
+            return f"{prefix}{liquidity_flag}", "buy"
+            
+        elif score >= 60: # Turun dari 65
+            return f"👀 WATCH{liquidity_flag}", "neutral"
+            
+        else:
+            return "🚫 AVOID", "sell"
+
+    # ... Helper methods lainnya (_calculate_technical_score, _calculate_fundamental_score, dll) copy dari kode lama ...
+    # Saya singkat agar muat, tapi di kode Bapak biarkan lengkap.
+    # ...
+    # ...
+    
+    # UPDATE FIND_TOP_GEMS: Remove Hard Filter
+    @PerformanceMonitor.time_execution
+    def find_top_gems(self, top_n=25, min_score=65, sector_filter=None):
+        unique_stocks = self.df['Stock Code'].unique()[:Config.MAX_STOCKS_ANALYZED]
+        results = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        total_stocks = len(unique_stocks)
+        
+        from concurrent.futures import as_completed
+
+        with ThreadPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
+            futures = {}
+            for i, stock in enumerate(unique_stocks):
+                futures[executor.submit(self.calculate_enhanced_gem_score, stock)] = stock
+            
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                stock = futures[future]
+                
+                try:
+                    score_data = future.result(timeout=5)
+                    
+                    if score_data and score_data['total_score'] >= min_score:
+                        if sector_filter and score_data['sector'] != sector_filter:
+                            continue
+                        
+                        # LOGIC REMOVED: if score_data['avg_daily_value'] < 1e9: continue
+                        # Sekarang semua masuk, filter manual di mata user
+
+                        results.append({
+                            'Stock': stock,
+                            'Gem Score': score_data['total_score'],
+                            'Signal': score_data['signal'],
+                            'Sector': score_data['sector'],
+                            'Price': score_data['latest_price'],
+                            'Price Chg': score_data['price_change_period'],
+                            'Free Float %': score_data['free_float'],
+                            'Smart Money (B)': score_data['smart_money_total'] / 1e9,
+                            'Positive Months': score_data['positive_months'],
+                            'Total Months': score_data['total_months'],
+                            'Monthly Data': score_data['monthly_data_points'],
+                            'RSI': score_data['rsi'],
+                            'Volatility %': score_data.get('volatility', 0) * 100,
+                            'Volume Trend': score_data.get('volume_ratio', 1),
+                            'Data Quality': score_data.get('data_quality_score', 0) * 100,
+                            'Regime Change': score_data.get('regime_change', 'STABLE'),
+                            'Avg Value (B)': score_data['avg_daily_value'] / 1e9,
+                            'Divergence': '✅' if score_data['is_divergence'] else '-'
+                        })
+                
+                except Exception as e:
+                    self.error_handler.logger.error(f"Error processing {stock}: {e}")
+                
+                if completed % 5 == 0:
+                    progress = completed / total_stocks
+                    progress_bar.progress(progress)
+                    status_text.text(f"🔍 Analyzing... {completed}/{total_stocks} stocks")
+        
+        progress_bar.empty()
+        status_text.empty()
+        
+        if results:
+            df_results = pd.DataFrame(results)
+            df_results = df_results.sort_values(['Gem Score', 'Divergence'], ascending=[False, False]).head(top_n)
+            return df_results
+        else:
+            return pd.DataFrame()
+            
+    # Pastikan SEMUA helper method (get_monthly_ksei_data, _calculate_technical_score, dll)
+    # tetap ada di dalam class ini saat Bapak copy-paste.
+    # Kode di atas saya potong bagian helpernya untuk fokus ke logic yang berubah.
+    # ...
+    # (Helper methods here)
     def _calculate_smart_money_score(self, monthly_data):
-        """Calculate smart money accumulation score"""
-        # (Gunakan logika lama Anda di sini, tidak berubah)
+        # Gunakan logika lama, tapi karena 'Smart_Money_Flow' sekarang mengandung Local CP,
+        # hasilnya akan otomatis naik jika ada akumulasi korporat.
         if monthly_data.empty or 'Smart_Money_Flow' not in monthly_data.columns:
             return 50
         
@@ -849,13 +946,9 @@ class EnhancedHiddenGemAnalyzer:
         positive_months = (monthly_data['Smart_Money_Flow'] > 0).sum()
         total_months = len(monthly_data)
         
-        # Amount score (0-30 points)
         amount_score = min(30, (abs(sm_total) / 5e9) * 15) if abs(sm_total) > 0 else 0
-        
-        # Consistency score (0-25 points)
         consistency_score = (positive_months / max(total_months, 1)) * 25
         
-        # Trend score (0-20 points)
         if len(monthly_data) >= 2:
             sm_values = monthly_data['Smart_Money_Flow'].values
             if len(sm_values) >= 3:
@@ -866,7 +959,6 @@ class EnhancedHiddenGemAnalyzer:
         else:
             trend_score = 0
             
-        # Retail divergence (0-15 points)
         if 'Retail_Flow' in monthly_data.columns:
             retail_total = monthly_data['Retail_Flow'].sum()
             if sm_total > 0 and retail_total < 0:
@@ -878,22 +970,17 @@ class EnhancedHiddenGemAnalyzer:
         else:
             divergence_score = 0
             
-        # Concentration score (0-10 points)
         if 'Ownership_Concentration' in monthly_data.columns:
             avg_concentration = monthly_data['Ownership_Concentration'].mean()
-            if avg_concentration > 60:
-                concentration_score = 10
-            elif avg_concentration > 40:
-                concentration_score = 7
-            else:
-                concentration_score = 3
+            if avg_concentration > 60: concentration_score = 10
+            elif avg_concentration > 40: concentration_score = 7
+            else: concentration_score = 3
         else:
             concentration_score = 5
             
         return amount_score + consistency_score + trend_score + divergence_score + concentration_score
 
     def _calculate_technical_score(self, recent_data, latest):
-        # (Gunakan logika lama, return tech_score)
         tech_score = 50
         if 'Close' in recent_data.columns:
             price_change = self._calculate_price_change(recent_data)
@@ -908,7 +995,6 @@ class EnhancedHiddenGemAnalyzer:
         return min(100, max(0, tech_score))
 
     def _calculate_fundamental_score(self, recent_data, latest):
-        # (Gunakan logika lama)
         ff_score = self._calculate_free_float_score(latest)
         liquidity_score = self._calculate_liquidity_score(recent_data, latest)
         sector_score = self._calculate_sector_momentum_score(latest.get('Sector', 'N/A'))
@@ -916,7 +1002,6 @@ class EnhancedHiddenGemAnalyzer:
         return min(100, max(0, ff_score + liquidity_score + sector_score + mcap_score))
         
     def _calculate_volatility_score(self, recent_data):
-        # (Gunakan logika lama)
         if 'Close' not in recent_data.columns or len(recent_data) < 20: return 50
         returns = recent_data['Close'].pct_change().dropna()
         if len(returns) < 10: return 50
@@ -927,10 +1012,7 @@ class EnhancedHiddenGemAnalyzer:
         elif volatility < 0.75: return 50
         elif volatility < 1.00: return 30
         else: return 15
-
-    # ... sertakan helper lain (_calculate_price_change, _calculate_volume_score, dll) dari kode awal ...
-    # Saya skip penulisannya agar tidak terlalu panjang, tapi Pastikan ADA di script Bapak.
-    
+        
     def _calculate_price_change(self, recent_data):
         if len(recent_data) < 2 or 'Close' not in recent_data.columns: return 0
         return ((recent_data.iloc[-1]['Close'] - recent_data.iloc[0]['Close']) / recent_data.iloc[0]['Close'] * 100)
