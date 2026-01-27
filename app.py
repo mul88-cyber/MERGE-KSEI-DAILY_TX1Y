@@ -2149,29 +2149,34 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
 
     
-    # TAB 2: STOCK ANALYZER - ENHANCED
+    # TAB 2: STOCK ANALYZER - FIXED ORDER
     with tab2:
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">🔍 Individual Stock Analysis</div>', unsafe_allow_html=True)
         
-        # 1. Definisikan list saham dulu
+        # --- LANGKAH 1: SIAPKAN DATA & WIDGET (WAJIB DI ATAS) ---
         available_stocks = sorted(df_merged['Stock Code'].unique())
         
-        # 2. Definisikan selected_stock DISINI (Jangan dipindah ke bawah)
+        # Default ke BBRI atau saham pertama jika BBRI tidak ada
+        default_idx = available_stocks.index('BBRI') if 'BBRI' in available_stocks else 0
+        
+        # DEFINISI VARIABEL: selected_stock dibuat DI SINI
         selected_stock = st.selectbox(
             "Select Stock for Deep Analysis", 
             available_stocks,
-            index=available_stocks.index('BBRI') if 'BBRI' in available_stocks else 0,
-            key="stock_analyzer_select" # Static key
+            index=default_idx,
+            key="stock_analyzer_select_widget" 
         )
         
-        # 3. Baru gunakan selected_stock di bawah ini
+        # --- LANGKAH 2: JALANKAN LOGIC SETELAH VARIABEL ADA ---
         if selected_stock:
+            # Hitung skor
             score_data = analyzer.calculate_enhanced_gem_score(selected_stock, lookback_days)
             
             if score_data:
-                # Header metrics
+                # --- A. HEADER METRICS ---
                 col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+                
                 with col_h1:
                     st.markdown(f"""
                     <div class="metric-card">
@@ -2216,29 +2221,22 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # Charts Area
+                # --- B. CHARTS AREA ---
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
-                    # FIX DUPLICATE ID: Pakai key unik dengan f-string nama saham
-                    st.plotly_chart(
-                        viz.create_gem_radar_chart(
-                            score_data['component_scores'], 
-                            selected_stock, 
-                            score_data['signal']
-                        ),
-                        use_container_width=True,
-                        key=f"radar_{selected_stock}" # <-- KEY UNIK 1
+                    # Key unik menggunakan selected_stock (Aman karena sudah didefinisikan di atas)
+                    radar_chart = viz.create_gem_radar_chart(
+                        score_data['component_scores'], 
+                        selected_stock, 
+                        score_data['signal']
                     )
+                    st.plotly_chart(radar_chart, use_container_width=True, key=f"radar_{selected_stock}")
                 
                 with col_c2:
-                    # FIX DUPLICATE ID: Pakai key unik
-                    st.plotly_chart(
-                        viz.create_ownership_timeline(df_merged, selected_stock),
-                        use_container_width=True,
-                        key=f"timeline_{selected_stock}" # <-- KEY UNIK 2
-                    )
+                    timeline_chart = viz.create_ownership_timeline(df_merged, selected_stock)
+                    st.plotly_chart(timeline_chart, use_container_width=True, key=f"timeline_{selected_stock}")
                 
-                # Data quality and predictive info
+                # --- C. ADVANCED ANALYTICS ---
                 st.markdown("##### 📊 Advanced Analytics")
                 col_q1, col_q2, col_q3, col_q4 = st.columns(4)
                 with col_q1:
@@ -2251,7 +2249,7 @@ def main():
                 with col_q4:
                     st.metric("Regime", score_data.get('regime_change', 'STABLE'))
                 
-                # Predictive forecast section
+                # --- D. PREDICTIVE FORECAST ---
                 if score_data.get('forecast'):
                     st.markdown("##### 🔮 Predictive Analytics")
                     forecast = score_data['forecast']
@@ -2268,12 +2266,11 @@ def main():
                     with col_f4:
                         st.metric("Strength", forecast.get('strength', 'N/A'))
                 
-                # Timeline evolution
+                # --- E. SCORE EVOLUTION ---
                 st.markdown("##### 📈 Score Evolution")
-                timeline = viz.create_gem_timeline_evolution(analyzer, selected_stock, df_merged)
-                if timeline:
-                    # FIX DUPLICATE ID: Pakai key unik
-                    st.plotly_chart(timeline, use_container_width=True, key=f"evol_{selected_stock}")
+                evol_chart = viz.create_gem_timeline_evolution(analyzer, selected_stock, df_merged)
+                if evol_chart:
+                    st.plotly_chart(evol_chart, use_container_width=True, key=f"evolution_{selected_stock}")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
