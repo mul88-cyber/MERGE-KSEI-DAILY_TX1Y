@@ -447,50 +447,46 @@ class EnhancedDataLoader:
         self.initialize_gdrive()
     
     def initialize_gdrive(self):
-        """Robust Google Drive Initialization with Key Fixing"""
+        """Robust Google Drive Init with Explicit Scoping"""
         try:
             # 1. Cek keberadaan secrets
             if "gcp_service_account" not in st.secrets:
-                st.error("❌ 'gcp_service_account' section missing in secrets.toml")
+                st.error("❌ 'gcp_service_account' tidak ditemukan di secrets.toml")
                 return False
             
-            # 2. Konversi ke Dictionary standar (menangani AttrDict dari Streamlit)
+            # 2. Parsing Secrets (Handle AttrDict vs Dict)
             creds_data = st.secrets["gcp_service_account"]
             if hasattr(creds_data, "to_dict"):
                 creds_json = creds_data.to_dict()
             else:
                 creds_json = dict(creds_data)
 
-            # 3. 🛡️ CRITICAL FIX: Sanitasi Private Key
-            # Masalah utama biasanya disini: \n dianggap text biasa, bukan enter.
+            # 3. 🛡️ FIX PRIVATE KEY (Masalah \n)
             if "private_key" in creds_json:
-                private_key = creds_json["private_key"]
-                # Ganti literal \n dengan actual newline character
-                creds_json["private_key"] = private_key.replace("\\n", "\n")
-
-            # 4. Create credentials
-            SCOPES = ['https://www.googleapis.com/auth/drive']
-            creds = Credentials.from_service_account_info(
-                creds_json,
-                scopes=SCOPES
-            )
+                # Pastikan ini string
+                pk = str(creds_json["private_key"])
+                # Jika key memiliki literal "\n" (2 karakter), ganti dengan enter asli
+                if "\\n" in pk:
+                    creds_json["private_key"] = pk.replace("\\n", "\n")
             
-            # 5. Build service
-            self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
+            # 4. 🛡️ FIX SCOPE (Masalah "Legacy API Error")
+            # Gunakan scope readonly (lebih aman & stabil untuk read-only app)
+            SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
             
-            # Test koneksi kecil (optional, untuk memastikan auth valid)
-            self.service.files().list(pageSize=1).execute()
+            # Step A: Buat credentials TANPA scope dulu
+            creds = Credentials.from_service_account_info(creds_json)
+            
+            # Step B: Tempel scope secara eksplisit menggunakan method .with_scopes()
+            # Ini memaksa library google-auth untuk me-refresh token dengan scope yang benar
+            scoped_creds = creds.with_scopes(SCOPES)
+            
+            # 5. Build service dengan scoped credentials
+            self.service = build('drive', 'v3', credentials=scoped_creds, cache_discovery=False)
             
             return True
             
         except Exception as e:
-            # Tampilkan error detail agar kita tahu salahnya dimana
-            st.error(f"❌ Google Drive Auth Error: {str(e)}")
-            # Hint spesifik untuk error umum
-            if "Invalid JWT" in str(e) or "ValueError" in str(e):
-                st.warning("💡 Tip: Kemungkinan format 'private_key' di secrets.toml bermasalah.")
-            if "accessNotConfigured" in str(e):
-                st.warning("💡 Tip: Google Drive API belum di-enable di Google Cloud Console.")
+            st.error(f"❌ Google Drive Init Error: {str(e)}")
             return False
             
             # ----------------------------------------------------
