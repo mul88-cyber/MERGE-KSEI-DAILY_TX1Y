@@ -12,3 +12,4 @@ scipy
 ta
 pyportfolioopt
 matplotlib
+xlsxwriter
