@@ -1912,13 +1912,8 @@ def main():
         "📁 Data Diagnostics"
     ])
     
-    # ... (SISA KODE UI/TABS SAMA PERSIS DENGAN VERSI SEBELUMNYA) ...
-    # Saya tidak menulis ulang bagian Tab 1-7 di sini untuk menghemat ruang, 
-    # karena perubahannya hanya di Data Loader dan Main Header.
-    # Anda bisa menggabungkan kode EnhancedDataLoader di atas dengan sisa kode UI Anda yang sudah ada.
     
-    # CONTOH MENYAMBUNG KEMBALI KE TAB 1 (Agar kode lengkap):
-    # TAB 1: TOP GEMS - ENHANCED
+    # TAB 1: TOP GEMS - FIXED RE-RUN ISSUE
     with tab1:
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">💎 Top Hidden Gem Candidates</div>', unsafe_allow_html=True)
@@ -1931,21 +1926,27 @@ def main():
             """)
         
         with col_t2:
+            # 👇 PERUBAHAN 1: Tombol langsung memicu kalkulasi & simpan ke Session State
             if st.button("🔍 Find Enhanced Gems", type="primary", use_container_width=True):
-                st.session_state.find_gems = True
+                sector_filter = None if selected_sector == 'All' else selected_sector
+                
+                with st.spinner(f"🚀 Analyzing {Config.MAX_STOCKS_ANALYZED} stocks with enhanced algorithms..."):
+                    # Jalankan fungsi berat HANYA di sini
+                    results_df = analyzer.find_top_gems(
+                        top_n=top_n_gems, 
+                        min_score=min_gem_score,
+                        sector_filter=sector_filter
+                    )
+                    # Simpan HASILNYA ke memory, bukan cuma statusnya
+                    st.session_state['cached_gem_results'] = results_df
         
-        if 'find_gems' in st.session_state and st.session_state.find_gems:
-            sector_filter = None if selected_sector == 'All' else selected_sector
-            
-            with st.spinner(f"🚀 Analyzing {Config.MAX_STOCKS_ANALYZED} stocks with enhanced algorithms..."):
-                gems_df = analyzer.find_top_gems(
-                    top_n=top_n_gems, 
-                    min_score=min_gem_score,
-                    sector_filter=sector_filter
-                )
+        # 👇 PERUBAHAN 2: Cek apakah data hasil sudah ada di memory
+        if 'cached_gem_results' in st.session_state:
+            gems_df = st.session_state['cached_gem_results']
             
             if not gems_df.empty:
-                # Apply advanced filters
+                # --- PROSES FILTERING RINGAN (Bisa dilakukan berulang tanpa lag) ---
+                # Filter ini tetap jalan realtime jika Bapak geser slider di sidebar
                 filtered_df = gems_df.copy()
                 filtered_df = filtered_df[filtered_df['Smart Money (B)'] >= min_smart_money]
                 filtered_df = filtered_df[filtered_df['Free Float %'] <= max_free_float]
@@ -1953,7 +1954,7 @@ def main():
                 filtered_df = filtered_df[filtered_df['Volatility %'] <= max_volatility]
                 
                 if not filtered_df.empty:
-                    # Summary metrics with enhanced visual
+                    # Summary metrics
                     col_sm1, col_sm2, col_sm3, col_sm4 = st.columns(4)
                     with col_sm1:
                         st.markdown(f"""
@@ -1993,7 +1994,6 @@ def main():
                     st.markdown("#### 🗺️ Sector Distribution")
                     heatmap = viz.create_sector_heatmap(filtered_df)
                     if heatmap:
-                        # 👇 PERBAIKAN: Tambahkan key="sector_heatmap"
                         st.plotly_chart(heatmap, use_container_width=True, key="sector_heatmap")
                     
                     # Correlation heatmap
@@ -2003,41 +2003,34 @@ def main():
                     if correlation_data is not None:
                         corr_heatmap = viz.create_correlation_heatmap(correlation_data)
                         if corr_heatmap:
-                            # 👇 PERBAIKAN: Tambahkan key="corr_heatmap"
                             st.plotly_chart(corr_heatmap, use_container_width=True, key="corr_heatmap")
                     
-                    # Gems table with enhanced formatting
+                    # Gems table
                     st.markdown("#### 🏆 Filtered Gem Candidates")
                     
                     display_cols = ['Stock', 'Gem Score', 'Signal', 'Sector', 'Price', 
                                   'Price Chg', 'Free Float %', 'Smart Money (B)', 
-                                  'Positive Months', 'Volatility %', 'RSI', 'Data Quality', 'Regime Change']
+                                  'Positive Months', 'Volatility %', 'RSI', 'Data Quality', 'Regime Change', 'Avg Value (B)', 'Divergence']
                     
-                    display_df = filtered_df[display_cols].copy()
+                    # Pastikan kolom ada sebelum dipanggil (jika hasil scan lama belum ada kolom baru)
+                    valid_cols = [c for c in display_cols if c in filtered_df.columns]
+                    display_df = filtered_df[valid_cols].copy()
                     
                     def color_signal(val):
-                        if 'BUY' in val:
-                            return 'background-color: #D1FAE5; color: #065F46; font-weight: bold;'
-                        elif 'ACCUMULATE' in val:
-                            return 'background-color: #FEF3C7; color: #92400E; font-weight: bold;'
-                        elif 'WATCH' in val:
-                            return 'background-color: #DBEAFE; color: #1E40AF; font-weight: bold;'
-                        elif 'AVOID' in val or 'CAUTION' in val:
-                            return 'background-color: #FEE2E2; color: #991B1B; font-weight: bold;'
-                        else:
-                            return 'background-color: #F3F4F6; color: #6B7280;'
+                        if 'BUY' in val: return 'background-color: #D1FAE5; color: #065F46; font-weight: bold;'
+                        elif 'ACCUMULATE' in val: return 'background-color: #FEF3C7; color: #92400E; font-weight: bold;'
+                        elif 'WATCH' in val: return 'background-color: #DBEAFE; color: #1E40AF; font-weight: bold;'
+                        elif 'AVOID' in val or 'CAUTION' in val: return 'background-color: #FEE2E2; color: #991B1B; font-weight: bold;'
+                        else: return 'background-color: #F3F4F6; color: #6B7280;'
                     
                     def format_regime(val):
-                        if 'ACCELERATING' in val:
-                            return f'🚀 {val}'
-                        elif 'INTENSIFYING' in val:
-                            return f'📈 {val}'
-                        elif 'STABLE' in val:
-                            return f'⚖️ {val}'
-                        else:
-                            return val
+                        if 'ACCELERATING' in str(val): return f'🚀 {val}'
+                        elif 'INTENSIFYING' in str(val): return f'📈 {val}'
+                        elif 'STABLE' in str(val): return f'⚖️ {val}'
+                        else: return str(val)
                     
-                    display_df['Regime Change'] = display_df['Regime Change'].apply(format_regime)
+                    if 'Regime Change' in display_df.columns:
+                        display_df['Regime Change'] = display_df['Regime Change'].apply(format_regime)
                     
                     st.dataframe(
                         display_df.style
@@ -2049,7 +2042,8 @@ def main():
                             'RSI': '{:.1f}',
                             'Gem Score': '{:.1f}',
                             'Volatility %': '{:.1f}%',
-                            'Data Quality': '{:.1f}%'
+                            'Data Quality': '{:.1f}%',
+                            'Avg Value (B)': '{:.2f}'
                         })
                         .applymap(color_signal, subset=['Signal'])
                         .background_gradient(subset=['Gem Score'], cmap='RdYlGn', vmin=70, vmax=100)
@@ -2089,19 +2083,20 @@ def main():
                             st.session_state.simulate_portfolio = True
                     
                     
-                    # Top gem deep dive
+                    # Top gem deep dive (Tanpa Hitung Ulang)
                     if len(filtered_df) > 0:
                         st.markdown("#### 🎯 Top Gem Deep Dive")
                         
-                        # Variabel di sini namanya top_gem, BUKAN selected_stock
                         top_gem = filtered_df.iloc[0]['Stock'] 
-                        score_data = analyzer.calculate_enhanced_gem_score(top_gem, lookback_days)
+                        
+                        # Di sini kita panggil fungsi wrapper cache (yang sudah dibuat di main)
+                        # Agar tidak hitung ulang jika top_gem sama
+                        score_data = get_cached_stock_score(analyzer, top_gem, lookback_days)
                         
                         if score_data:
                             col_ana1, col_ana2 = st.columns(2)
                             
                             with col_ana1:
-                                # 👇 PERBAIKAN DISINI: Gunakan top_gem, JANGAN selected_stock
                                 st.plotly_chart(
                                     viz.create_gem_radar_chart(
                                         score_data['component_scores'], 
@@ -2109,56 +2104,27 @@ def main():
                                         score_data['signal']
                                     ),
                                     use_container_width=True,
-                                    key=f"radar_top_{top_gem}" # <-- Ganti jadi top_gem
+                                    key=f"radar_top_{top_gem}" 
                                 )
                             
                             with col_ana2:
-                                # 👇 PERBAIKAN DISINI: Gunakan top_gem
                                 st.plotly_chart(
                                     viz.create_ownership_timeline(df_merged, top_gem),
                                     use_container_width=True,
-                                    key=f"timeline_top_{top_gem}" # <-- Ganti jadi top_gem
+                                    key=f"timeline_top_{top_gem}" 
                                 )
                             
                             # Timeline evolution
                             st.markdown("##### 📈 Score Evolution")
                             timeline = viz.create_gem_timeline_evolution(analyzer, top_gem, df_merged)
                             if timeline:
-                                # 👇 PERBAIKAN DISINI: Gunakan top_gem
                                 st.plotly_chart(timeline, use_container_width=True, key=f"evolution_top_{top_gem}")
-                            
-                            # Detailed analysis
-                            with st.expander(f"📊 Detailed Analysis: {top_gem}"):
-                                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-                                with col_d1:
-                                    st.metric("Gem Score", f"{score_data['total_score']:.1f}/100")
-                                with col_d2:
-                                    st.metric("Market Regime", analyzer.analyze_market_trend().upper())
-                                with col_d3:
-                                    months_pos = f"{score_data['positive_months']}/{score_data['total_months']}"
-                                    st.metric("Positive Months", months_pos)
-                                with col_d4:
-                                    st.metric("Volatility", f"{score_data.get('volatility', 0)*100:.1f}%")
-                                
-                                # Predictive forecast
-                                if score_data.get('forecast'):
-                                    forecast = score_data['forecast']
-                                    st.markdown("##### 🔮 Predictive Forecast")
-                                    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-                                    with col_f1:
-                                        st.metric("Next Month Flow", 
-                                                 f"Rp {forecast.get('forecast', 0)/1e9:.1f}B",
-                                                 delta=forecast.get('direction', ''))
-                                    with col_f2:
-                                        st.metric("Confidence", f"{forecast.get('confidence', 0)*100:.0f}%")
-                                    with col_f3:
-                                        st.metric("Trend", forecast.get('trend', '').upper())
-                                    with col_f4:
-                                        st.metric("Strength", forecast.get('strength', 'N/A'))
                 else:
                     st.warning("⚠️ No gems found with current filters. Try relaxing criteria.")
             else:
                 st.info("📭 No hidden gems found. Try lowering minimum score or changing sector filter.")
+        else:
+            st.info("👈 Please click the 'Find Enhanced Gems' button to start analysis.")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
