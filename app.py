@@ -695,7 +695,7 @@ class EnhancedDataLoader:
         merged['Has_KSEI_Data'] = merged['Smart_Money_Flow'].notna()
         merged['Has_Daily_Data'] = merged['Close'].notna()
         
-        return merged
+        return merged.sort_values(['Stock Code', 'Date']).reset_index(drop=True)
 
     def validate_data_integrity(self, df_merged):
         """Validation logic"""
@@ -1760,6 +1760,12 @@ class PortfolioSimulator:
 # 🚀 MAIN DASHBOARD - ENTERPRISE EDITION
 # ==============================================================================
 def main():
+    # 👇 1. FUNGSI WRAPPER CACHE (Agar Tab 2 & 5 Ngebut)
+    @st.cache_data(show_spinner=False, ttl=3600)
+    def get_cached_stock_score(_analyzer, stock_code, lookback_days):
+        """Cache hasil perhitungan per saham"""
+        return _analyzer.calculate_enhanced_gem_score(stock_code, lookback_days)
+
     # HEADER
     st.markdown("""
     <div class="header-gradient">
@@ -2179,7 +2185,7 @@ def main():
         # --- LANGKAH 2: JALANKAN LOGIC SETELAH VARIABEL ADA ---
         if selected_stock:
             # Hitung skor
-            score_data = analyzer.calculate_enhanced_gem_score(selected_stock, lookback_days)
+            score_data = get_cached_stock_score(analyzer, selected_stock, lookback_days)
             
             if score_data:
                 # --- A. HEADER METRICS ---
@@ -2556,6 +2562,7 @@ def main():
             index=predictive_stocks.index('BBCA') if 'BBCA' in predictive_stocks else 0
         )
         
+    
         if selected_predictive:
             predictive = PredictiveAnalytics(df_merged)
             
@@ -2564,7 +2571,9 @@ def main():
             with col_pred1:
                 # Flow forecasting
                 st.markdown("##### 📈 Flow Forecasting")
-                forecast = predictive.forecast_next_month_flow(selected_predictive)
+                
+                # 👇 PERUBAHAN DISINI: Panggil pakai fungsi cache wrapper
+                forecast = get_cached_forecast(predictive, selected_predictive)
                 
                 if forecast:
                     col_fc1, col_fc2 = st.columns(2)
@@ -2583,7 +2592,7 @@ def main():
                     st.warning("Insufficient data for forecasting")
             
             with col_pred2:
-                # Regime detection
+                # Regime detection (Regime biasanya cepat, tidak perlu cache berat)
                 st.markdown("##### 🔄 Regime Detection")
                 regime = predictive.detect_regime_change(selected_predictive)
                 
@@ -2612,6 +2621,7 @@ def main():
             
             # Historical pattern analysis
             st.markdown("##### 📊 Historical Pattern Analysis")
+            # Mengambil data saham spesifik (operasi ringan, biasanya tidak perlu cache khusus jika df_merged sudah di-cache)
             stock_data = df_merged[df_merged['Stock Code'] == selected_predictive].sort_values('Date')
             
             if not stock_data.empty and 'Smart_Money_Flow' in stock_data.columns:
@@ -2636,7 +2646,8 @@ def main():
                     )
                     
                     fig_pattern.update_layout(height=400)
-                    st.plotly_chart(fig_pattern, use_container_width=True)
+                    # Tambahkan Key Unik agar tidak error duplicate ID
+                    st.plotly_chart(fig_pattern, use_container_width=True, key=f"pattern_{selected_predictive}")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
