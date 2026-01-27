@@ -1760,11 +1760,18 @@ class PortfolioSimulator:
 # 🚀 MAIN DASHBOARD - ENTERPRISE EDITION
 # ==============================================================================
 def main():
-    # 👇 1. FUNGSI WRAPPER CACHE (Agar Tab 2 & 5 Ngebut)
+    # 👇 1. FUNGSI WRAPPER CACHE UNTUK STOCK ANALYZER (Tab 2)
     @st.cache_data(show_spinner=False, ttl=3600)
     def get_cached_stock_score(_analyzer, stock_code, lookback_days):
         """Cache hasil perhitungan per saham"""
         return _analyzer.calculate_enhanced_gem_score(stock_code, lookback_days)
+
+    # 👇 2. FUNGSI WRAPPER CACHE UNTUK FORECASTING (Tab 5) - INI YANG HILANG
+    @st.cache_data(show_spinner=False, ttl=3600)
+    def get_cached_forecast(_predictive, stock_code):
+        """Cache hasil forecast predictive analytics"""
+        return _predictive.forecast_next_month_flow(stock_code)
+
 
     # HEADER
     st.markdown("""
