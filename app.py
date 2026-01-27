@@ -2071,19 +2071,23 @@ def main():
         st.markdown('<div class="css-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-title">🔍 Individual Stock Analysis</div>', unsafe_allow_html=True)
         
+        # 1. Definisikan list saham dulu
         available_stocks = sorted(df_merged['Stock Code'].unique())
+        
+        # 2. Definisikan selected_stock DISINI (Jangan dipindah ke bawah)
         selected_stock = st.selectbox(
             "Select Stock for Deep Analysis", 
             available_stocks,
             index=available_stocks.index('BBRI') if 'BBRI' in available_stocks else 0,
-            key="stock_analyzer_select"
+            key="stock_analyzer_select" # Static key
         )
         
+        # 3. Baru gunakan selected_stock di bawah ini
         if selected_stock:
             score_data = analyzer.calculate_enhanced_gem_score(selected_stock, lookback_days)
             
             if score_data:
-                # Header metrics with enhanced styling
+                # Header metrics
                 col_h1, col_h2, col_h3, col_h4 = st.columns(4)
                 with col_h1:
                     st.markdown(f"""
@@ -2129,22 +2133,26 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # Charts
+                # Charts Area
                 col_c1, col_c2 = st.columns(2)
                 with col_c1:
-                    # 👇 PERBAIKAN: Tambahkan key dengan nama saham agar unik
+                    # FIX DUPLICATE ID: Pakai key unik dengan f-string nama saham
                     st.plotly_chart(
-                        viz.create_gem_radar_chart(...),
+                        viz.create_gem_radar_chart(
+                            score_data['component_scores'], 
+                            selected_stock, 
+                            score_data['signal']
+                        ),
                         use_container_width=True,
-                        key=f"radar_{selected_stock}" # <-- Pakai f-string biar unik per saham
+                        key=f"radar_{selected_stock}" # <-- KEY UNIK 1
                     )
                 
                 with col_c2:
-                    # 👇 PERBAIKAN: Tambahkan key
+                    # FIX DUPLICATE ID: Pakai key unik
                     st.plotly_chart(
                         viz.create_ownership_timeline(df_merged, selected_stock),
                         use_container_width=True,
-                        key=f"timeline_{selected_stock}" # <-- Pakai f-string
+                        key=f"timeline_{selected_stock}" # <-- KEY UNIK 2
                     )
                 
                 # Data quality and predictive info
@@ -2176,6 +2184,13 @@ def main():
                         st.metric("Trend", forecast.get('trend', '').upper())
                     with col_f4:
                         st.metric("Strength", forecast.get('strength', 'N/A'))
+                
+                # Timeline evolution
+                st.markdown("##### 📈 Score Evolution")
+                timeline = viz.create_gem_timeline_evolution(analyzer, selected_stock, df_merged)
+                if timeline:
+                    # FIX DUPLICATE ID: Pakai key unik
+                    st.plotly_chart(timeline, use_container_width=True, key=f"evol_{selected_stock}")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
