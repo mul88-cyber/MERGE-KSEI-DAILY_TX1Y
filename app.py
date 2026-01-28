@@ -486,74 +486,31 @@ class OptimizedDataLoader:
         
         return df
     
-    def _merge_data(self, df_ksei, df_hist):
-        """Merge KSEI and Historical data"""
-        if df_ksei.empty or df_hist.empty:
-            return pd.DataFrame()
-        
-        # Sort both dataframes
-        df_ksei = df_ksei.sort_values(['Stock Code', 'Date']).reset_index(drop=True)
-        df_hist = df_hist.sort_values(['Stock Code', 'Date']).reset_index(drop=True)
-        
-        # KSEI columns to merge
-        ksei_cols = ['Date', 'Stock Code', 'Smart_Money_Flow', 'Institutional_Net', 
-                    'Retail_Flow', 'Free Float', 'Ownership_Concentration']
-        ksei_cols = [c for c in ksei_cols if c in df_ksei.columns]
-        
-        # Create month-end indicator for KSEI data
-        df_ksei['is_month_end'] = df_ksei['Date'].dt.is_month_end
-        
-        # For each stock, forward fill KSEI data to daily
-        merged_list = []
-        unique_stocks = df_hist['Stock Code'].unique()[:100]  # Limit for testing
-        
-        print(f"🔄 Merging {len(unique_stocks)} stocks...")
-        
-        for i, stock in enumerate(unique_stocks):
-            if i % 20 == 0:
-                print(f"   Processing stock {i+1}/{len(unique_stocks)}: {stock}")
+        def _merge_data(self, df_ksei, df_hist):
+            """Merge KSEI and Historical data - SUPER SIMPLE"""
+            if df_ksei.empty or df_hist.empty:
+                return pd.DataFrame()
             
-            hist_stock = df_hist[df_hist['Stock Code'] == stock].copy()
-            ksei_stock = df_ksei[df_ksei['Stock Code'] == stock].copy()
+            print(f"🔗 Simple merge: KSEI={len(df_ksei)}, HIST={len(df_hist)}")
             
-            if hist_stock.empty or ksei_stock.empty:
-                continue
+            # 1. Ambil data terakhir per saham dari KSEI
+            latest_ksei = df_ksei.sort_values(['Stock Code', 'Date']).groupby('Stock Code').last().reset_index()
             
-            # Merge using forward fill
-            merged_stock = hist_stock.copy()
+            # 2. Kolom yang mau diambil dari KSEI
+            ksei_cols = ['Stock Code', 'Smart_Money_Flow', 'Institutional_Net', 
+                        'Retail_Flow', 'Free Float', 'Ownership_Concentration']
+            ksei_cols = [c for c in ksei_cols if c in latest_ksei.columns]
             
-            for col in ksei_cols:
-                if col in ksei_stock.columns:
-                    # Create series for forward filling
-                    ksei_dates = ksei_stock['Date'].values
-                    ksei_values = ksei_stock[col].values
-                    
-                    # Forward fill to historical dates
-                    merged_stock[col] = np.interp(
-                        merged_stock['Date'].astype(np.int64) // 10**9,
-                        ksei_dates.astype(np.int64) // 10**9,
-                        ksei_values,
-                        left=np.nan,
-                        right=np.nan
-                    )
+            # 3. Simple merge berdasarkan Stock Code saja
+            merged = pd.merge(
+                df_hist,
+                latest_ksei[ksei_cols],
+                on='Stock Code',
+                how='left'
+            )
             
-            merged_list.append(merged_stock)
-        
-        if not merged_list:
-            return pd.DataFrame()
-        
-        # Combine all stocks
-        merged = pd.concat(merged_list, ignore_index=True)
-        
-        # Fill remaining NaN with forward fill per stock
-        for col in ksei_cols:
-            if col in merged.columns:
-                merged[col] = merged.groupby('Stock Code')[col].ffill()
-        
-        # Clean up
-        merged = merged.dropna(subset=['Close', 'Smart_Money_Flow'], how='all')
-        
-        return merged
+            print(f"✅ Simple merge complete: {len(merged)} rows")
+            return merged
 
 # ==============================================================================
 # 🎯 GEM ANALYZER
