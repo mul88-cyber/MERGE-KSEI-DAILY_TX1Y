@@ -29,6 +29,9 @@ st.markdown("""
     }
     h1, h2, h3 { color: #0052CC; font-family: 'Segoe UI', sans-serif; font-weight: 600; }
     div[data-testid="stExpander"] { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 8px; }
+    /* Mempercantik Tab */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -90,7 +93,7 @@ st.sidebar.divider()
 menu = st.sidebar.radio("Main Navigation", ["🏠 Dashboard Overview", "📊 Stock Analyzer", "🔍 Smart Screener"])
 
 # ==============================================================================
-# 4. DASHBOARD (MARKET MAP UPDATE)
+# 4. DASHBOARD OVERVIEW
 # ==============================================================================
 if menu == "🏠 Dashboard Overview":
     st.title("Market Pulse")
@@ -98,30 +101,60 @@ if menu == "🏠 Dashboard Overview":
     
     daily_snap = df_daily[df_daily['Last Trading Date'] == latest_date].copy()
     
-    # Metrics
+    # Metrics Calculation
     total_val = daily_snap['Value'].sum() / 1e9 
     net_foreign = daily_snap['Net Foreign Flow'].sum() / 1e9
     liquid = daily_snap[daily_snap['Value'] > 1_000_000_000]
     top_gainer = liquid.loc[liquid['Change %'].idxmax()] if not liquid.empty else daily_snap.iloc[0]
+    
+    # Hitung Whale
     whale_count = daily_snap[daily_snap.get('Big_Player_Anomaly', False) == True].shape[0]
 
+    # Display Metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Value (IDR)", f"{total_val:,.0f} M")
     c2.metric("Net Foreign Flow", f"{net_foreign:,.0f} M", delta_color="normal")
     c3.metric("Top Gainer (Liquid)", f"{top_gainer['Stock Code']}", f"+{top_gainer['Change %']:.1f}%")
     c4.metric("🐋 Whale Radar", f"{whale_count} Alerts")
 
+    # --- [NEW FEATURE] WHALE QUICK VIEW EXPANDER ---
+    if whale_count > 0:
+        with st.expander(f"🐋 Lihat Daftar {whale_count} Saham Whale (Big Player Anomaly)", expanded=False):
+            whales = daily_snap[daily_snap.get('Big_Player_Anomaly', False) == True].copy()
+            cols_whale = ['Stock Code', 'Close', 'Change %', 'Volume', 'Avg_Order_Value', 'Sector']
+            # Pastikan kolom ada sebelum display
+            cols_whale = [c for c in cols_whale if c in whales.columns]
+            
+            st.dataframe(
+                whales[cols_whale].sort_values("Avg_Order_Value", ascending=False),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Avg_Order_Value": st.column_config.NumberColumn("Avg Order (Rp)", format="Rp %.0f"),
+                    "Volume": st.column_config.NumberColumn("Vol", format="%.0f")
+                }
+            )
+            st.caption("ℹ️ **Whale Anomaly:** Saham dengan Rata-rata Nilai Order (AOV) melonjak >2x rata-rata bulanan.")
+
     st.markdown("---")
     
-    # --- [NEW] TABBED VISUALIZATION ---
+    # --- VISUALIZATION TABS ---
     tab_map, tab_scatter = st.tabs(["🗺️ Market Map (Treemap)", "📍 Foreign Flow Scatter"])
     
     with tab_map:
-        st.subheader("Sektor & Saham Dominan (Finviz Style)")
-        # Filter Top 200 by Value agar map rapi
-        treemap_data = daily_snap.nlargest(200, 'Value')
+        st.subheader("Sektor & Saham Dominan")
         
-        # Color Scale Logic (Red to Green)
+        # 1. Siapkan Data
+        treemap_data = daily_snap.nlargest(200, 'Value').copy()
+        
+        # 2. Format Angka Manusiawi (T/M/Jt)
+        def format_idr(x):
+            if x >= 1e12: return f"Rp {x/1e12:.2f} T"
+            elif x >= 1e9: return f"Rp {x/1e9:.0f} M"
+            else: return f"Rp {x/1e6:.0f} Jt"
+            
+        treemap_data['Value_Text'] = treemap_data['Value'].apply(format_idr)
+        
+        # 3. Plot Treemap
         fig_tree = px.treemap(
             treemap_data, 
             path=[px.Constant("IHSG"), 'Sector', 'Stock Code'], 
@@ -129,11 +162,17 @@ if menu == "🏠 Dashboard Overview":
             color='Change %',
             color_continuous_scale='RdYlGn',
             color_continuous_midpoint=0,
-            hover_data=['Close', 'Net Foreign Flow'],
+            custom_data=['Value_Text', 'Close', 'Change %'], # Data untuk hover/text
             title=f"Market Map by Transaction Value"
         )
-        fig_tree.update_layout(template="plotly_white", margin=dict(t=30, l=10, r=10, b=10), height=600)
-        fig_tree.data[0].textinfo = 'label+text+value'
+        
+        # 4. Custom Text Template
+        fig_tree.update_traces(
+            texttemplate="<b>%{label}</b><br>%{customdata[0]}<br>%{customdata[2]:.2f}%",
+            hovertemplate="<b>%{label}</b><br>Val: %{customdata[0]}<br>Price: %{customdata[1]}<br>Chg: %{customdata[2]:.2f}%"
+        )
+        
+        fig_tree.update_layout(template="plotly_white", margin=dict(t=30, l=10, r=10, b=10), height=650)
         st.plotly_chart(fig_tree, use_container_width=True)
         st.caption("💡 **Ukuran Kotak** = Nilai Transaksi. **Warna** = Kenaikan/Penurunan Harga.")
 
@@ -150,7 +189,7 @@ if menu == "🏠 Dashboard Overview":
         st.plotly_chart(fig_scat, use_container_width=True)
 
 # ==============================================================================
-# 5. STOCK ANALYZER (CUMULATIVE FLOW UPDATE)
+# 5. STOCK ANALYZER (DEEP DIVE)
 # ==============================================================================
 elif menu == "📊 Stock Analyzer":
     st.title("Deep Dive Analysis")
@@ -165,9 +204,8 @@ elif menu == "📊 Stock Analyzer":
     stock_k = df_ksei[df_ksei['Code'] == ticker].sort_values("Date")
     last = stock_d.iloc[-1]
 
-    # --- [NEW] CUMULATIVE CALCULATION ---
+    # Calculate Cumulative Foreign Flow
     stock_d['Cum_Foreign'] = stock_d['Net Foreign Flow'].cumsum()
-    # Normalisasi agar start dari 0 di grafik
     stock_d['Cum_Foreign'] = stock_d['Cum_Foreign'] - stock_d['Cum_Foreign'].iloc[0]
 
     # Metrics
@@ -176,34 +214,41 @@ elif menu == "📊 Stock Analyzer":
         m1.metric("Close Price", f"Rp {last['Close']:,.0f}", f"{last['Change %']:.2f}%")
         m2.metric("Volume Spike", f"{last['Volume Spike (x)']:.1f}x")
         m3.metric("Bandar Signal", last['Final Signal'])
-        m4.metric("Foreign Accumulation (1Y)", f"Rp {stock_d['Net Foreign Flow'].sum()/1e9:,.1f} M", help="Total Net Buy/Sell Asing setahun terakhir")
+        m4.metric("Foreign Accum (1Y)", f"Rp {stock_d['Net Foreign Flow'].sum()/1e9:,.1f} M")
 
     st.write("")
 
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Chart & Accumulation", "⚖️ Peer Comparison", "🏦 KSEI Ownership", "📄 Data"])
     
     with tab1:
-        # --- [NEW] HYBRID CHART (Price vs Cumulative Flow) ---
+        # Hybrid Chart
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05,
                             specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
         
-        # 1. Candlestick (Primary Y)
+        # Price
         fig.add_trace(go.Candlestick(
             x=stock_d['Last Trading Date'], open=stock_d['Open Price'], 
             high=stock_d['High'], low=stock_d['Low'], close=stock_d['Close'], name='Price'
         ), row=1, col=1, secondary_y=False)
         
-        # 2. VWMA (Primary Y)
+        # VWMA
         fig.add_trace(go.Scatter(x=stock_d['Last Trading Date'], y=stock_d['VWMA_20D'], 
                                  line=dict(color='#0052CC', width=1.5), name='VWMA 20'), row=1, col=1, secondary_y=False)
 
-        # 3. [NEW] Cumulative Foreign Flow (Secondary Y - Line)
+        # Cumulative Foreign Flow (Yellow Line)
         fig.add_trace(go.Scatter(
             x=stock_d['Last Trading Date'], y=stock_d['Cum_Foreign'],
-            line=dict(color='#FFAB00', width=2, dash='solid'), name='Cumul. Foreign Flow'
+            line=dict(color='#FFAB00', width=2), name='Cumul. Foreign Flow'
         ), row=1, col=1, secondary_y=True)
 
-        # 4. Volume Bar (Bottom Panel)
+        # Whale Anomaly Star
+        if 'Big_Player_Anomaly' in stock_d.columns:
+            anomalies = stock_d[stock_d['Big_Player_Anomaly'] == True]
+            fig.add_trace(go.Scatter(x=anomalies['Last Trading Date'], y=anomalies['High']*1.02, 
+                                     mode='markers', marker=dict(symbol='star', size=12, color='#FFAB00', line=dict(width=1, color='black')), 
+                                     name='Whale Activity'), row=1, col=1, secondary_y=False)
+
+        # Volume Bar
         colors = ['#36B37E' if v > 0 else '#FF5630' for v in stock_d['Net Foreign Flow']]
         fig.add_trace(go.Bar(x=stock_d['Last Trading Date'], y=stock_d['Net Foreign Flow'], 
                              marker_color=colors, name='Daily Net Flow'), row=2, col=1)
@@ -213,31 +258,22 @@ elif menu == "📊 Stock Analyzer":
         fig.update_yaxes(title_text="Price", secondary_y=False, row=1, col=1)
         fig.update_yaxes(title_text="Cumulative Flow (Rp)", secondary_y=True, row=1, col=1, showgrid=False)
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("💡 **Garis Kuning (Kanan)** = Akumulasi Uang Asing. Jika Harga Turun tapi Garis Kuning Naik = **Strong Divergence (Buy)**.")
 
     with tab2:
-        # --- [NEW] PEER COMPARISON ---
         st.subheader(f"Perbandingan {ticker} vs Sektor {last['Sector']}")
-        
-        # Ambil semua saham di sektor yang sama
         peers = df_daily[(df_daily['Sector'] == last['Sector']) & (df_daily['Last Trading Date'] == latest_date)].copy()
-        # Filter saham liquid saja (> 1M transaksi) agar grafik tidak penuh sampah
-        peers = peers[peers['Value'] > 500_000_000] 
+        peers = peers[peers['Value'] > 500_000_000] # Filter Liquid
         
         col_peer1, col_peer2 = st.columns(2)
-        
         with col_peer1:
-            # Chart 1: Foreign Flow Ranking
             fig_p1 = px.bar(peers.nlargest(10, 'Net Foreign Flow'), 
                             x='Stock Code', y='Net Foreign Flow', color='Net Foreign Flow',
-                            color_continuous_scale='RdYlGn', title="Top Foreign Inflow (Sector Peers)")
+                            color_continuous_scale='RdYlGn', title="Top Foreign Inflow (Peers)")
             st.plotly_chart(fig_p1, use_container_width=True)
-            
         with col_peer2:
-            # Chart 2: Volume Spike Ranking
             fig_p2 = px.bar(peers.nlargest(10, 'Volume Spike (x)'), 
                             x='Stock Code', y='Volume Spike (x)', 
-                            title="Top Volume Spikes (Sector Peers)")
+                            title="Top Volume Spikes (Peers)")
             st.plotly_chart(fig_p2, use_container_width=True)
 
     with tab3:
