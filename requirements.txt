@@ -13,3 +13,5 @@ ta
 pyportfolioopt
 matplotlib
 xlsxwriter
+yfinance
+streamlit-extras
