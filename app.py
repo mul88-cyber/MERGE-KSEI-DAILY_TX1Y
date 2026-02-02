@@ -1,305 +1,340 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
+import io
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
-# -----------------------------------------------------------------------------
-# 1. CONFIG & STYLING (Bloomberg Terminal Vibe)
-# -----------------------------------------------------------------------------
+# ==============================================================================
+# 1. KONFIGURASI HALAMAN & TEMA (LIGHT MODE PRO)
+# ==============================================================================
 st.set_page_config(
-    page_title="IDX Institutional Flow Tracker",
+    page_title="IDX Pro Terminal",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS untuk tampilan premium & compact
 st.markdown("""
 <style>
-    /* Main Background & Text */
-    .stApp {
-        background-color: #0e1117;
-        color: #fafafa;
+    /* Global Theme */
+    .stApp { background-color: #F7F9FC; color: #172B4D; }
+    
+    /* Metrics Card */
+    div[data-testid="stMetric"] {
+        background-color: #FFFFFF; border: 1px solid #E0E0E0;
+        padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     
-    /* Metrics Styling */
-    div[data-testid="stMetricValue"] {
-        font-size: 1.4rem !important;
-        color: #00ffca; /* Cyan Bloomberg */
-    }
+    /* Typography */
+    h1, h2, h3 { color: #0052CC; font-family: 'Segoe UI', sans-serif; font-weight: 600; }
     
-    /* Tables */
-    .dataframe {
-        font-family: 'Consolas', monospace !important; 
-    }
-    
-    /* Remove Padding */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #1f2937;
-        border-radius: 5px;
-        color: white;
-        padding: 10px 20px;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #00ffca;
-        color: black;
-        font-weight: bold;
-    }
+    /* Containers */
+    div[data-testid="stExpander"] { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 8px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 2. HELPER FUNCTIONS & MOCK DATA GENERATOR
-# -----------------------------------------------------------------------------
+# ==============================================================================
+# 2. DATA ENGINE
+# ==============================================================================
+FILE_HARIAN = 'Kompilasi_Data_1Tahun.csv'
+FILE_KSEI = 'KSEI_Shareholder_Processed.csv'
 
-def format_num(num):
-    """Format angka dengan pemisah koma (e.g., 1,000,000)."""
-    if pd.isna(num):
-        return "-"
-    return "{:,.0f}".format(num)
-
-def format_pct(num):
-    """Format persentase."""
-    return "{:,.2f}%".format(num)
-
-@st.cache_data
-def generate_mock_ksei_data():
-    """
-    Simulasi data KSEI (Ownership) yang biasanya Bapak miliki.
-    Mencakup data T-1 (Kemarin) dan T (Hari ini) untuk menghitung flow.
-    """
-    tickers = ['BBCA', 'BBRI', 'TLKM', 'ASII', 'GOTO', 'BUMI']
-    data = []
-    
-    # Simulate data for last 30 days
-    start_date = datetime.now() - timedelta(days=30)
-    
-    for ticker in tickers:
-        # Base shares (lembar saham)
-        base_shares = np.random.randint(10_000_000, 500_000_000)
-        
-        # Random distribution logic
-        current_date = start_date
-        retail_hold = np.random.uniform(0.3, 0.4) # 30-40% Ritel
-        
-        for _ in range(30):
-            # Fluktuasi harian
-            change = np.random.uniform(-0.01, 0.01) 
-            retail_hold += change
-            retail_hold = max(0.1, min(0.9, retail_hold)) # Cap 10-90%
-            
-            shares_retail = int(base_shares * retail_hold)
-            shares_foreign = int(base_shares * (0.3 - (change/2)))
-            shares_insurance = int(base_shares * 0.1)
-            shares_pension = int(base_shares * 0.1)
-            shares_mutual_fund = int(base_shares * 0.05)
-            shares_corp = base_shares - (shares_retail + shares_foreign + shares_insurance + shares_pension + shares_mutual_fund)
-            
-            data.append({
-                'Date': current_date.strftime('%Y-%m-%d'),
-                'Ticker': ticker,
-                'Lokal_Individual': shares_retail, # Ritel (Indikator Distribusi)
-                'Asing_Total': shares_foreign,    # Asing (Smart Money)
-                'Lokal_Insurance': shares_insurance, # Institutional Long Term
-                'Lokal_PensionFund': shares_pension, # Institutional Long Term
-                'Lokal_MutualFund': shares_mutual_fund, # Institutional Mid Term
-                'Lokal_Corporate': shares_corp,   # Pengendali
-                'Total_Shares': base_shares
-            })
-            current_date += timedelta(days=1)
-            
-    df = pd.DataFrame(data)
-    df['Date'] = pd.to_datetime(df['Date'])
-    return df
-
-# -----------------------------------------------------------------------------
-# 3. ANALYSIS LOGIC (BANDARMOLOGY)
-# -----------------------------------------------------------------------------
-
-def analyze_smart_money_flow(df, ticker):
-    """
-    Analisa perubahan kepemilikan:
-    Jika Ritel Jual & Institusi/Asing Beli -> AKUMULASI (Bagus)
-    Jika Ritel Beli & Institusi/Asing Jual -> DISTRIBUSI (Bahaya)
-    """
-    stock_data = df[df['Ticker'] == ticker].sort_values('Date').reset_index(drop=True)
-    
-    if len(stock_data) < 2:
-        return None, None
-
-    latest = stock_data.iloc[-1]
-    prev = stock_data.iloc[-2]
-    
-    # Hitung Perubahan (Flow)
-    flow = {
-        'Retail_Flow': latest['Lokal_Individual'] - prev['Lokal_Individual'],
-        'Foreign_Flow': latest['Asing_Total'] - prev['Asing_Total'],
-        'Inst_Ins_Flow': latest['Lokal_Insurance'] - prev['Lokal_Insurance'],
-        'Inst_PF_Flow': latest['Lokal_PensionFund'] - prev['Lokal_PensionFund'],
-        'Inst_MF_Flow': latest['Lokal_MutualFund'] - prev['Lokal_MutualFund']
-    }
-    
-    # Hitung Smart Money Net Flow (Asing + Institusi Kuat)
-    smart_money_net = flow['Foreign_Flow'] + flow['Inst_Ins_Flow'] + flow['Inst_PF_Flow']
-    
-    return stock_data, flow, smart_money_net
-
-# -----------------------------------------------------------------------------
-# 4. UI COMPONENTS
-# -----------------------------------------------------------------------------
-
-def main():
-    st.sidebar.title("📊 IDX Data Deck")
-    st.sidebar.caption("KSEI Ownership & Bandarmology")
-    
-    # Load Data
-    df_ksei = generate_mock_ksei_data()
-    
-    # Sidebar Filters
-    selected_ticker = st.sidebar.selectbox("Pilih Emiten (Ticker)", df_ksei['Ticker'].unique())
-    
-    # --- HEADER ---
-    st.title(f"{selected_ticker} - Deep Dive Analysis")
-    st.markdown("---")
-
-    # Tabs Structure
-    tab1, tab2, tab3 = st.tabs(["🏛️ KSEI Bandarmology", "📈 Technical Chart", "📂 Raw Data"])
-
-    # --- TAB 1: KSEI BANDARMOLOGY (NEW FEATURE) ---
-    with tab1:
-        stock_df, flow, smart_money = analyze_smart_money_flow(df_ksei, selected_ticker)
-        
-        if stock_df is not None:
-            # 1. High Level Summary (Cards)
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Lembar Saham", format_num(stock_df.iloc[-1]['Total_Shares']))
-            
-            with col2:
-                # Retail Change
-                delta_retail = flow['Retail_Flow']
-                color = "inverse" # Streamlit auto color: Red if pos (bad), Green if neg (good) for retail? 
-                # Let's customize via text
-                lbl = "Retail (Individu)"
-                val = format_num(delta_retail)
-                st.metric(lbl, val, delta=format_num(delta_retail), delta_color="inverse")
-                
-            with col3:
-                # Foreign Change
-                delta_foreign = flow['Foreign_Flow']
-                st.metric("Asing (Foreign)", format_num(delta_foreign), delta=format_num(delta_foreign))
-                
-            with col4:
-                # Smart Money Verdict
-                status = "AKUMULASI 🟢" if smart_money > 0 else "DISTRIBUSI 🔴"
-                if abs(smart_money) < (stock_df.iloc[-1]['Total_Shares'] * 0.001): status = "NETRAL ⚪"
-                
-                st.metric("Status Bandar", status, help="Net Flow dari Asing + Asuransi + Dapen")
-
-            st.markdown("---")
-
-            # 2. Detailed Flow Visualization (Waterfall)
-            st.subheader("Peta Pergerakan Saham (Flow Map)")
-            st.caption(f"Perubahan kepemilikan dari {stock_df.iloc[-2]['Date'].date()} ke {stock_df.iloc[-1]['Date'].date()}")
-            
-            # Prepare data for Waterfall
-            investor_types = ['Ritel (Ind)', 'Asing', 'Asuransi', 'Dapen', 'Reksa Dana']
-            flow_values = [
-                flow['Retail_Flow'], 
-                flow['Foreign_Flow'], 
-                flow['Inst_Ins_Flow'], 
-                flow['Inst_PF_Flow'], 
-                flow['Inst_MF_Flow']
-            ]
-            
-            # Color logic: Green for Buy, Red for Sell
-            colors = ['#ef4444' if x < 0 else '#22c55e' for x in flow_values]
-
-            fig_flow = go.Figure(go.Bar(
-                x=investor_types,
-                y=flow_values,
-                marker_color=colors,
-                text=[format_num(x) for x in flow_values],
-                textposition='auto'
-            ))
-            
-            fig_flow.update_layout(
-                title="Net Buy/Sell per Tipe Investor",
-                template="plotly_dark",
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)',
-                yaxis_title="Lembar Saham",
-                height=400
-            )
-            st.plotly_chart(fig_flow, use_container_width=True)
-            
-            # 3. Trend Analysis (Ritel vs Asing)
-            st.subheader("Tren Kepemilikan: Ritel vs Smart Money")
-            
-            fig_trend = go.Figure()
-            fig_trend.add_trace(go.Scatter(x=stock_df['Date'], y=stock_df['Lokal_Individual'], name='Ritel (Lokal ID)', line=dict(color='yellow', width=2)))
-            fig_trend.add_trace(go.Scatter(x=stock_df['Date'], y=stock_df['Asing_Total'], name='Asing', line=dict(color='cyan', width=2)))
-            fig_trend.add_trace(go.Scatter(x=stock_df['Date'], y=stock_df['Lokal_Insurance'], name='Asuransi', line=dict(color='purple', width=1, dash='dot')))
-            
-            fig_trend.update_layout(
-                template="plotly_dark",
-                xaxis_title="Tanggal",
-                yaxis_title="Jumlah Lembar",
-                hovermode="x unified",
-                height=400,
-                legend=dict(orientation="h", y=1.1)
-            )
-            st.plotly_chart(fig_trend, use_container_width=True)
-            
-            # Insight Box
-            with st.expander("💡 Analisis Insight", expanded=True):
-                st.markdown(f"""
-                **Logika Analisis:**
-                1. Jika Garis **Kuning (Ritel)** turun tajam sementara **Cyan (Asing)** naik, ini sinyal **Strong Buy**.
-                2. Perhatikan **Asuransi & Dapen**. Jika mereka keluar (Jual) dalam jumlah besar, biasanya tren jangka panjang berpotensi bearish (mereka jarang *cut loss* kecuali fundamental berubah).
-                3. **Net Change hari ini:** Smart Money mencatatkan perubahan sebesar **{format_num(smart_money)}** lembar.
-                """)
-
-    # --- TAB 2: TECHNICAL (PLACEHOLDER) ---
-    with tab2:
-        st.info("Area Analisis Teknikal (Price Action, MA, MACD) akan ditampilkan di sini.")
-        # Placeholder chart
-        st.line_chart(stock_df.set_index('Date')['Lokal_Individual'])
-
-    # --- TAB 3: RAW DATA ---
-    with tab3:
-        st.subheader("Data Mentah KSEI")
-        
-        # Apply formatting to the dataframe for display
-        display_df = stock_df.copy()
-        numeric_cols = display_df.select_dtypes(include=['number']).columns
-        
-        # Format for display only (convert to string with commas)
-        for col in numeric_cols:
-            display_df[col] = display_df[col].apply(lambda x: "{:,.0f}".format(x))
-            
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        
-        st.download_button(
-            label="Download CSV",
-            data=stock_df.to_csv(index=False),
-            file_name=f"{selected_ticker}_ksei_data.csv",
-            mime='text/csv'
+def get_drive_service():
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=['https://www.googleapis.com/auth/drive.readonly']
         )
+        return build('drive', 'v3', credentials=creds, cache_discovery=False)
+    except Exception as e:
+        st.error(f"❌ Gagal Autentikasi Google: {e}"); return None
 
-if __name__ == "__main__":
-    main()
+def download_csv_from_drive(service, filename):
+    try:
+        query = f"name = '{filename}' and trashed = false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        files = results.get('files', [])
+        if not files: return None
+        request = service.files().get_media(fileId=files[0]['id'])
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False: status, done = downloader.next_chunk()
+        fh.seek(0)
+        return pd.read_csv(fh)
+    except Exception as e:
+        st.error(f"❌ Error download '{filename}': {e}"); return None
+
+@st.cache_data(ttl=3600)
+def load_data():
+    service = get_drive_service()
+    if not service: return None, None
+    with st.spinner('🔄 Menghubungkan ke IDX Data Lake...'):
+        # 1. Load Data Harian
+        df_d = download_csv_from_drive(service, FILE_HARIAN)
+        if df_d is not None: 
+            df_d['Last Trading Date'] = pd.to_datetime(df_d['Last Trading Date'])
+            
+            # --- [CRITICAL FIX] CONVERT FOREIGN FLOW TO RUPIAH (VALUE) ---
+            # Data mentah biasanya Volume (Lembar). Kita kali Typical Price agar jadi Rupiah.
+            # Ini membuat Treemap & Chart Akumulasi menjadi "Apple-to-Apple" secara Value.
+            if 'Typical Price' in df_d.columns and 'Net Foreign Flow' in df_d.columns:
+                df_d['Net Foreign Flow'] = df_d['Net Foreign Flow'] * df_d['Typical Price']
+            
+        # 2. Load Data KSEI
+        df_k = download_csv_from_drive(service, FILE_KSEI)
+        if df_k is not None: df_k['Date'] = pd.to_datetime(df_k['Date'])
+        
+        return df_d, df_k
+
+df_daily, df_ksei = load_data()
+if df_daily is None or df_ksei is None: st.stop()
+
+latest_date = df_daily['Last Trading Date'].max()
+last_ksei_date = df_ksei['Date'].max()
+
+# --- PRE-CALCULATE MULTI-PERIOD FLOW (VALUE BASED) ---
+df_daily = df_daily.sort_values(['Stock Code', 'Last Trading Date'])
+# Hitung akumulasi Value Rupiah untuk 1 Minggu (5 Hari) & 1 Bulan (20 Hari)
+df_daily['Flow_1W'] = df_daily.groupby('Stock Code')['Net Foreign Flow'].transform(lambda x: x.rolling(5, min_periods=1).sum())
+df_daily['Flow_1M'] = df_daily.groupby('Stock Code')['Net Foreign Flow'].transform(lambda x: x.rolling(20, min_periods=1).sum())
+
+# ==============================================================================
+# 3. SIDEBAR NAVIGATION
+# ==============================================================================
+st.sidebar.markdown("## 💠 IDX PRO TERMINAL")
+st.sidebar.info(f"🟢 **System Online**\n\n📅 Market: {latest_date.date()}\n📅 KSEI: {last_ksei_date.date()}")
+st.sidebar.divider()
+menu = st.sidebar.radio("Main Navigation", ["🏠 Dashboard Overview", "📊 Stock Analyzer", "🔍 Smart Screener"])
+
+# ==============================================================================
+# 4. DASHBOARD OVERVIEW
+# ==============================================================================
+if menu == "🏠 Dashboard Overview":
+    st.title("Market Pulse")
+    st.markdown(f"**Snapshot:** {latest_date.strftime('%A, %d %B %Y')}")
+    
+    daily_snap = df_daily[df_daily['Last Trading Date'] == latest_date].copy()
+    
+    # Metrics
+    total_val = daily_snap['Value'].sum() / 1e9 
+    net_foreign = daily_snap['Net Foreign Flow'].sum() / 1e9 # Sekarang sudah Value (Miliar Rupiah)
+    liquid = daily_snap[daily_snap['Value'] > 1_000_000_000]
+    top_gainer = liquid.loc[liquid['Change %'].idxmax()] if not liquid.empty else daily_snap.iloc[0]
+    whale_count = daily_snap[daily_snap.get('Big_Player_Anomaly', False) == True].shape[0]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Value (IDR)", f"{total_val:,.0f} M")
+    c2.metric("Net Foreign Flow", f"{net_foreign:,.0f} M", delta_color="normal", help="Total Net Buy/Sell Asing (Value)")
+    c3.metric("Top Gainer (Liquid)", f"{top_gainer['Stock Code']}", f"+{top_gainer['Change %']:.1f}%")
+    c4.metric("🐋 Whale Radar", f"{whale_count} Alerts")
+
+    if whale_count > 0:
+        with st.expander(f"🐋 Lihat Daftar {whale_count} Saham Whale (Big Player Anomaly)", expanded=False):
+            whales = daily_snap[daily_snap.get('Big_Player_Anomaly', False) == True].copy()
+            cols_whale = ['Stock Code', 'Close', 'Change %', 'Volume', 'Avg_Order_Value', 'Sector']
+            cols_whale = [c for c in cols_whale if c in whales.columns]
+            st.dataframe(
+                whales[cols_whale].sort_values("Avg_Order_Value", ascending=False),
+                hide_index=True, use_container_width=True,
+                column_config={"Avg_Order_Value": st.column_config.NumberColumn("Avg Order", format="Rp %.0f")}
+            )
+
+    st.markdown("---")
+    
+    # --- VISUALIZATION TABS ---
+    tab_map, tab_scatter = st.tabs(["🗺️ Market Map (Treemap)", "📍 Foreign Flow Scatter"])
+    
+    with tab_map:
+        c_mode1, c_mode2 = st.columns([1, 3])
+        with c_mode1:
+            map_mode = st.selectbox("Tampilkan Map Berdasarkan:", 
+                                    ["Transaction Value", "Foreign Flow (1 Hari)", "Foreign Flow (1 Minggu)", "Foreign Flow (1 Bulan)"])
+        
+        # Helper Formatter IDR
+        def format_idr(x):
+            if abs(x) >= 1e12: return f"Rp {x/1e12:.2f} T"
+            elif abs(x) >= 1e9: return f"Rp {x/1e9:.0f} M"
+            else: return f"Rp {x/1e6:.0f} Jt"
+
+        # --- LOGIC MAP ---
+        if map_mode == "Transaction Value":
+            treemap_data = daily_snap.nlargest(200, 'Value').copy()
+            treemap_data['Value_Text'] = treemap_data['Value'].apply(format_idr)
+            
+            fig_tree = px.treemap(
+                treemap_data, path=[px.Constant("IHSG"), 'Sector', 'Stock Code'], 
+                values='Value', color='Change %',
+                color_continuous_scale=['#D32F2F', '#E0E0E0', '#00C853'], range_color=[-3, 3],
+                custom_data=['Value_Text', 'Close', 'Change %'], title="Market Map by Transaction Value"
+            )
+            fig_tree.update_traces(
+                texttemplate="<b>%{label}</b><br>%{customdata[0]}<br>%{customdata[2]:.2f}%",
+                hovertemplate="<b>%{label}</b><br>Val: %{customdata[0]}<br>Price: %{customdata[1]}<br>Chg: %{customdata[2]:.2f}%"
+            )
+            
+        else: # FOREIGN FLOW (VALUE) MODES
+            if "1 Hari" in map_mode: col_target = 'Net Foreign Flow'
+            elif "1 Minggu" in map_mode: col_target = 'Flow_1W'
+            else: col_target = 'Flow_1M'
+            
+            # Ambil Top 200 Flow Absolute (Termasuk yg Big Sell)
+            treemap_data = daily_snap.copy()
+            treemap_data['Abs_Flow'] = treemap_data[col_target].abs()
+            treemap_data = treemap_data.nlargest(200, 'Abs_Flow')
+            treemap_data['Flow_Text'] = treemap_data[col_target].apply(format_idr)
+            
+            fig_tree = px.treemap(
+                treemap_data, path=[px.Constant("IHSG"), 'Sector', 'Stock Code'], 
+                values='Abs_Flow', # Size = Besar Uang (Tanpa Minus)
+                color=col_target,  # Color = Arah Uang (Minus Merah, Plus Hijau)
+                color_continuous_scale=['#D32F2F', '#E0E0E0', '#00C853'],
+                color_continuous_midpoint=0,
+                custom_data=['Flow_Text', 'Close', 'Change %'],
+                title=f"Foreign Flow Map (Value): {map_mode}"
+            )
+            fig_tree.update_traces(
+                texttemplate="<b>%{label}</b><br>%{customdata[0]}",
+                hovertemplate="<b>%{label}</b><br>Net Flow: %{customdata[0]}<br>Price: %{customdata[1]}<br>Chg: %{customdata[2]:.2f}%"
+            )
+
+        fig_tree.update_layout(template="plotly_white", margin=dict(t=30, l=10, r=10, b=10), height=650)
+        st.plotly_chart(fig_tree, use_container_width=True)
+        
+        if "Foreign" in map_mode:
+            st.caption("💡 **Note:** Angka sudah dalam **Rupiah (Value)**. Hijau = Asing Net Buy, Merah = Asing Net Sell.")
+
+    with tab_scatter:
+        st.subheader("Foreign Flow vs Price Action (Top Movers)")
+        top_100 = daily_snap.nlargest(100, 'Value').copy()
+        
+        # Smart Labeling (Declutter)
+        top_100['Label'] = np.where(
+            (top_100['Value'] >= top_100['Value'].nlargest(20).min()) |
+            (top_100['Change %'].abs() >= top_100['Change %'].abs().nlargest(5).min()), 
+            top_100['Stock Code'], ""
+        )
+        
+        fig_scat = px.scatter(
+            top_100, x="Change %", y="Net Foreign Flow", size="Value", color="Sector",
+            hover_name="Stock Code", hover_data=["Close", "Avg_Order_Value"], text="Label",
+            template="plotly_white", height=650
+        )
+        fig_scat.update_traces(textposition='top center', textfont=dict(size=10, color='black'))
+        fig_scat.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3)
+        fig_scat.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.3)
+        st.plotly_chart(fig_scat, use_container_width=True)
+
+# ==============================================================================
+# 5. STOCK ANALYZER (VALUE FLOW CHART)
+# ==============================================================================
+elif menu == "📊 Stock Analyzer":
+    st.title("Deep Dive Analysis")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        stock_list = sorted(df_daily['Stock Code'].unique())
+        idx_def = stock_list.index("BBCA") if "BBCA" in stock_list else 0
+        ticker = st.selectbox("Select Ticker:", stock_list, index=idx_def)
+        
+    stock_d = df_daily[df_daily['Stock Code'] == ticker].sort_values("Last Trading Date")
+    stock_k = df_ksei[df_ksei['Code'] == ticker].sort_values("Date")
+    last = stock_d.iloc[-1]
+
+    # Cumulative Flow (Value based now)
+    stock_d['Cum_Foreign'] = stock_d['Net Foreign Flow'].cumsum()
+    stock_d['Cum_Foreign'] = stock_d['Cum_Foreign'] - stock_d['Cum_Foreign'].iloc[0]
+
+    with st.container():
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Close Price", f"Rp {last['Close']:,.0f}", f"{last['Change %']:.2f}%")
+        m2.metric("Volume Spike", f"{last['Volume Spike (x)']:.1f}x")
+        m3.metric("Bandar Signal", last['Final Signal'])
+        m4.metric("Foreign Accum (1Y)", f"Rp {stock_d['Net Foreign Flow'].sum()/1e9:,.1f} M", help="Total Net Flow Asing (Value) Setahun")
+
+    st.write("")
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Chart & Accumulation", "⚖️ Peer Comparison", "🏦 KSEI Ownership", "📄 Data"])
+    
+    with tab1:
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05,
+                            specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
+        
+        # Price Candle
+        fig.add_trace(go.Candlestick(x=stock_d['Last Trading Date'], open=stock_d['Open Price'], high=stock_d['High'], low=stock_d['Low'], close=stock_d['Close'], name='Price'), row=1, col=1, secondary_y=False)
+        # VWMA
+        fig.add_trace(go.Scatter(x=stock_d['Last Trading Date'], y=stock_d['VWMA_20D'], line=dict(color='#0052CC', width=1.5), name='VWMA 20'), row=1, col=1, secondary_y=False)
+        # Cumulative Flow (Value)
+        fig.add_trace(go.Scatter(x=stock_d['Last Trading Date'], y=stock_d['Cum_Foreign'], line=dict(color='#FFAB00', width=2), name='Cumul. Foreign Flow (Rp)'), row=1, col=1, secondary_y=True)
+        
+        # Whale Star
+        if 'Big_Player_Anomaly' in stock_d.columns:
+            anomalies = stock_d[stock_d['Big_Player_Anomaly'] == True]
+            fig.add_trace(go.Scatter(x=anomalies['Last Trading Date'], y=anomalies['High']*1.05, mode='markers', marker=dict(symbol='star', size=14, color='#FFD700', line=dict(width=1, color='black')), name='Whale Activity'), row=1, col=1, secondary_y=False)
+        
+        # Daily Net Flow Bar (Value)
+        colors = ['#36B37E' if v > 0 else '#FF5630' for v in stock_d['Net Foreign Flow']]
+        fig.add_trace(go.Bar(x=stock_d['Last Trading Date'], y=stock_d['Net Foreign Flow'], marker_color=colors, name='Daily Net Flow (Rp)'), row=2, col=1)
+        
+        fig.update_layout(template="plotly_white", height=700, xaxis_rangeslider_visible=False, title=f"Price vs Cumulative Foreign Flow (Value): {ticker}", hovermode="x unified")
+        fig.update_yaxes(title_text="Cumulative Flow (Rp)", secondary_y=True, row=1, col=1, showgrid=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        st.subheader(f"Perbandingan {ticker} vs Sektor {last['Sector']}")
+        peers = df_daily[(df_daily['Sector'] == last['Sector']) & (df_daily['Last Trading Date'] == latest_date)].copy()
+        peers = peers[peers['Value'] > 500_000_000] 
+        c_p1, c_p2 = st.columns(2)
+        with c_p1:
+            fig_p1 = px.bar(peers.nlargest(10, 'Net Foreign Flow'), x='Stock Code', y='Net Foreign Flow', color='Net Foreign Flow', color_continuous_scale='RdYlGn', title="Top Foreign Inflow (Value)")
+            st.plotly_chart(fig_p1, use_container_width=True)
+        with c_p2:
+            fig_p2 = px.bar(peers.nlargest(10, 'Volume Spike (x)'), x='Stock Code', y='Volume Spike (x)', title="Top Volume Spikes")
+            st.plotly_chart(fig_p2, use_container_width=True)
+
+    with tab3:
+        if stock_k.empty:
+            st.warning("Data KSEI tidak tersedia.")
+        else:
+            opts = ['Total_Foreign', 'Local IS', 'Local PF', 'Total_Local']
+            sel = st.multiselect("Select Investor:", opts, default=['Total_Foreign', 'Local IS'])
+            fig_k = px.line(stock_k, x='Date', y=sel, template="plotly_white", markers=True)
+            st.plotly_chart(fig_k, use_container_width=True)
+
+    with tab4:
+        st.dataframe(stock_d.sort_values("Last Trading Date", ascending=False), use_container_width=True)
+
+# ==============================================================================
+# 6. SMART SCREENER
+# ==============================================================================
+elif menu == "🔍 Smart Screener":
+    st.title("Smart Screener")
+    with st.expander("🛠️  Filter Settings", expanded=True):
+        c1, c2, c3 = st.columns(3)
+        sig = c1.selectbox("Bandar Signal", ["All", "Akumulasi", "Strong Akumulasi", "Distribusi"])
+        sec = c2.selectbox("Sector", ["All"] + list(df_daily['Sector'].unique()))
+        whale = c3.checkbox("Show Whale Anomaly Only?")
+    
+    res = df_daily[df_daily['Last Trading Date'] == latest_date].copy()
+    if sig != "All": res = res[res['Final Signal'] == sig]
+    if sec != "All": res = res[res['Sector'] == sec]
+    if whale and 'Big_Player_Anomaly' in res.columns: res = res[res['Big_Player_Anomaly'] == True]
+    
+    st.info(f"Result: **{len(res)}** stocks found.")
+    cols = ['Stock Code', 'Close', 'Change %', 'Volume', 'Avg_Order_Value', 'Net Foreign Flow', 'Final Signal']
+    
+    # Formatting khusus untuk Value Flow di tabel
+    st.dataframe(
+        res[[c for c in cols if c in res.columns]].sort_values('Net Foreign Flow', ascending=False), 
+        hide_index=True, use_container_width=True,
+        column_config={
+            "Net Foreign Flow": st.column_config.NumberColumn("Foreign Flow (Rp)", format="Rp %.0f"),
+            "Avg_Order_Value": st.column_config.NumberColumn("Avg Order (Rp)", format="Rp %.0f")
+        }
+    )
