@@ -478,8 +478,15 @@ elif menu == "📊 Stock Analyzer":
                 
                 d_df = pd.DataFrame([diffs]).T.rename(columns={0: 'Net Change (Lembar)'})
                 d_df['Status'] = d_df['Net Change (Lembar)'].apply(lambda x: "🟢 Akumulasi" if x > 0 else "🔴 Distribusi")
-                # Khusus Retail logic terbalik
-                d_df.loc['Local ID', 'Status'] = d_df.loc['Local ID', 'Net Change (Lembar)'].apply(lambda x: "🔴 Panik Jual (Good)" if x < 0 else "🟢 Ritel Masuk (Bad)")
+                 
+                # Cek nilai Ritel secara manual karena ini scalar (single value)
+                retail_val = d_df.loc['Local ID', 'Net Change (Lembar)']
+                
+                # Update status khusus row 'Local ID'
+                if retail_val < 0:
+                    d_df.loc['Local ID', 'Status'] = "🔴 Panik Jual (Good)"
+                else:
+                    d_df.loc['Local ID', 'Status'] = "🟢 Ritel Masuk (Bad)"
                 
                 st.table(d_df)
 
