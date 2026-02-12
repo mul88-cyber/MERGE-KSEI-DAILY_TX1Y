@@ -115,8 +115,19 @@ last_ksei_date = df_ksei['Date'].max()
 
 # --- PRE-CALCULATE ---
 df_daily = df_daily.sort_values(['Stock Code', 'Last Trading Date'])
+
+# [FIX] Hitung Avg_Order_Value (Nilai Transaksi per Order)
+# Rumus: Value / Frequency
+if 'Value' in df_daily.columns and 'Frequency' in df_daily.columns:
+    # Hindari pembagian dengan 0
+    safe_freq = df_daily['Frequency'].replace(0, 1) 
+    df_daily['Avg_Order_Value'] = df_daily['Value'] / safe_freq
+else:
+    # Fallback jika Value tidak ada (pakai Volume * Close)
+    df_daily['Avg_Order_Value'] = 0
+
+# ... kode Flow_1W, Flow_1M Anda yang lama ...
 df_daily['Flow_1W'] = df_daily.groupby('Stock Code')['Net Foreign Flow'].transform(lambda x: x.rolling(5, min_periods=1).sum())
-df_daily['Flow_1M'] = df_daily.groupby('Stock Code')['Net Foreign Flow'].transform(lambda x: x.rolling(20, min_periods=1).sum())
 
 # ==============================================================================
 # 3. SIDEBAR NAVIGATION
